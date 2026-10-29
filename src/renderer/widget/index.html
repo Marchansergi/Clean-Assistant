@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Clean Assistant</title>
+  <link rel="stylesheet" href="widget.css">
+</head>
+<body>
+  <!-- Burbuja minimizada -->
+  <button id="bubble" class="bubble" title="Abrir">
+    <span class="bubble-ring"></span>
+    <span class="bubble-avatar"></span>
+    <span class="bubble-badge hidden"></span>
+  </button>
+
+  <!-- Panel expandido -->
+  <main id="card" class="card">
+    <header class="top">
+      <div class="hero-avatar" id="heroAvatar"></div>
+      <div class="hero-text">
+        <div class="hero-name" id="heroName">Clau</div>
+        <div class="hero-status" id="heroStatus"><span class="dot"></span><span class="label">Lista</span></div>
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" id="menuBtn" title="Menú">⋯</button>
+        <button class="icon-btn" id="minBtn" title="Minimizar">–</button>
+      </div>
+      <div class="menu hidden" id="menu">
+        <button data-menu="new">🧹 Nueva conversación</button>
+        <button data-menu="agents">🧸 Mis agentes</button>
+        <button data-menu="settings">⚙️ Ajustes</button>
+        <hr>
+        <button data-menu="quit">⏻ Salir</button>
+      </div>
+    </header>
+
+    <nav class="agent-switch" id="agentSwitch"></nav>
+
+    <!-- Vista: chat -->
+    <section class="view" id="viewChat">
+      <div class="messages" id="messages"></div>
+      <div class="confirm hidden" id="confirm">
+        <div class="confirm-title" id="confirmTitle"></div>
+        <pre class="confirm-detail" id="confirmDetail"></pre>
+        <div class="confirm-actions">
+          <button class="btn ghost" id="confirmNo">No</button>
+          <button class="btn primary" id="confirmYes">Permitir</button>
+        </div>
+      </div>
+      <footer class="composer" id="composer">
+        <textarea id="prompt" rows="1" placeholder="Dime qué hago en tu ordenador…"></textarea>
+        <button class="send" id="sendBtn" title="Enviar">➤</button>
+        <button class="stop hidden" id="stopBtn" title="Detener">■ <span id="stopLabel">Detener</span></button>
+      </footer>
+    </section>
+
+    <!-- Vista: agentes -->
+    <section class="view panel hidden" id="viewAgents">
+      <div class="panel-head"><button class="icon-btn back" data-back>←</button><h2>Mis agentes</h2></div>
+      <div class="panel-body" id="agentsBody"></div>
+    </section>
+
+    <!-- Vista: ajustes -->
+    <section class="view panel hidden" id="viewSettings">
+      <div class="panel-head"><button class="icon-btn back" data-back>←</button><h2>Ajustes</h2></div>
+      <div class="panel-body" id="settingsBody"></div>
+    </section>
+  </main>
+  <script src="widget.js"></script>
+</body>
+</html>

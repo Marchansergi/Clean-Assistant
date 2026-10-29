@@ -1,0 +1,39 @@
+{
+  "name": "clean-assistant",
+  "productName": "Clean Assistant",
+  "version": "0.1.0",
+  "description": "Mini agentes de escritorio (Claude y ChatGPT) que usan tu ordenador con un cursor propio.",
+  "main": "dist/main/main.js",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "cross-spawn": "^7.0.6",
+    "openai": "^7.45.1"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/node": "^22.10.0",
+    "electron": "^38.4.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.11",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.cleanassistant.app",
+    "productName": "Clean Assistant",
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "assets/**/*", "package.json"],
+    "asarUnpack": ["dist/mcp-bridge/**"],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

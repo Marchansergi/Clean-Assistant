@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Capa del agente</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div id="frame"></div>
+  <div id="ripples"></div>
+  <div id="cursor" class="hidden">
+    <svg class="pointer" viewBox="0 0 32 32" width="34" height="34">
+      <path d="M5 3 L5 25 L11 19.5 L15.2 28.5 L19.4 26.6 L15.3 17.8 L23.5 17.8 Z" />
+    </svg>
+    <div class="tag"><span class="tag-avatar"></span><span class="tag-name"></span></div>
+    <div class="status"></div>
+  </div>
+  <div id="keyboard-wrap" class="hidden">
+    <div id="typed"><span class="typed-text"></span><span class="caret"></span></div>
+    <div id="keyboard"></div>
+  </div>
+  <script src="overlay.js"></script>
+</body>
+</html>
