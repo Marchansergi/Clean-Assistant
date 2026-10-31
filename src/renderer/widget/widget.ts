@@ -2,6 +2,7 @@ import type { WidgetApi } from '../../preload/widget';
 import { CLAUDE_MODELS, DEFAULT_MODELS, OPENAI_MODEL_SUGGESTIONS, PROVIDER_LABELS, isClaudeProvider, modelLabel } from '../../shared/defaults';
 import type { AgentEvent, AgentProfile, ConfirmRequest, ProviderId, PublicSettings, RunStateMsg, Settings } from '../../shared/types';
 import { avatarHtml } from '../common/mascots';
+import { playNotchSound } from './sounds';
 
 declare global {
   interface Window { api: WidgetApi }
@@ -638,6 +639,25 @@ function renderSettings() {
   quality.addEventListener('change', () => saveLater({ captureMaxEdge: Number(quality.value) }));
 
 
+  const screensInfo = h('div', { class: 'hint' }, 'Buscando pantallas…');
+  void api.listScreens().then((list) => {
+    screensInfo.replaceChildren(
+      h('div', {}, list.length === 1 ? 'Detectada 1 pantalla:' : `Detectadas ${list.length} pantallas:`),
+      ...list.map((l) => h('div', {}, `• ${l}`)));
+  });
+
+  const volValue = h('span', { class: 'hint' }, `${s.soundVolume} %`);
+  const volInput = h('input', { type: 'range', min: 0, max: 100, step: 5, value: s.soundVolume });
+  volInput.addEventListener('input', () => {
+    volValue.textContent = `${volInput.value} %`;
+    saveLater({ soundVolume: Number(volInput.value) });
+  });
+  volInput.addEventListener('change', () => playNotchSound('open', Number(volInput.value)));
+  const soundVolume = h('div', { class: 'field' },
+    h('div', { class: 'inline' }, h('label', {}, 'Volumen'), volValue,
+      h('button', { class: 'btn ghost small', onclick: () => playNotchSound('open', Number(volInput.value)) }, 'Probar')),
+    volInput);
+
   body.replaceChildren(
     h('div', { class: 'group' },
       h('h3', {}, 'Cuentas'),
@@ -656,6 +676,14 @@ function renderSettings() {
       h('div', { class: 'field' }, h('label', {}, 'Confirmaciones'), confirmSel),
       h('div', { class: 'field' }, h('label', {}, 'Máximo de pasos por tarea'), maxSteps),
       h('div', { class: 'field' }, h('label', {}, 'Atajo para detener'), shortcut, h('div', { class: 'hint' }, 'Formato de Electron, p. ej. Control+Alt+Q. Funciona aunque la app no tenga el foco.'))),
+    h('div', { class: 'group' },
+      h('h3', {}, 'Pantallas'),
+      toggle('Usar todas las pantallas', 'El agente puede ver y trabajar en cualquiera de tus monitores, cambiando de uno a otro según la tarea.', 'multiScreen'),
+      screensInfo),
+    h('div', { class: 'group' },
+      h('h3', {}, 'Sonido'),
+      toggle('Sonido al abrir y cerrar', 'Un «pop» suave cuando se despliega o se recoge el notch.', 'sounds'),
+      soundVolume),
     h('div', { class: 'group' },
       h('h3', {}, 'Cursor y teclado'),
       toggle('Devolverte el ratón', 'Tras cada clic del agente, tu puntero vuelve a donde estaba.', 'returnCursor'),
@@ -727,6 +755,7 @@ async function init() {
   api.onConfirm((r) => showConfirm(r));
   api.onConfirmCancel((id) => { if (pendingConfirm?.id === id) showConfirm(null); });
   api.onExpanded((v) => {
+    if (v !== isOpen && settings.sounds) playNotchSound(v ? 'open' : 'close', settings.soundVolume);
     isOpen = v;
     window.clearTimeout(shrinkTimer);
     if (v) {

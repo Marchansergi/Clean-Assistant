@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { DEFAULT_MODELS } from '../../shared/defaults';
 import { DeniedError, StopError, parseModifiers, type Action, type ActionResult } from '../desktop';
 import { getSecret } from '../settings';
-import { systemPrompt, taskPrompt, type RunContext } from './context';
+import { SWITCH_SCREEN_TOOL, systemPrompt, taskPrompt, type RunContext } from './context';
 
 type Input = Record<string, unknown>;
 
@@ -60,10 +60,10 @@ function toAction(name: string, input: Input): Action {
 }
 
 function toContent(r: ActionResult): Anthropic.ToolResultBlockParam['content'] {
-  if (r.image) {
-    return [{ type: 'image', source: { type: 'base64', media_type: r.image.mediaType, data: r.image.base64 } }];
-  }
-  return [{ type: 'text', text: r.text ?? 'OK' }];
+  const content: Exclude<Anthropic.ToolResultBlockParam['content'], string | undefined> = [];
+  if (r.text && (r.image || r.text !== 'OK')) content.push({ type: 'text', text: r.text });
+  if (r.image) content.push({ type: 'image', source: { type: 'base64', media_type: r.image.mediaType, data: r.image.base64 } });
+  return content.length ? content : [{ type: 'text', text: 'OK' }];
 }
 
 export async function runAnthropic(ctx: RunContext): Promise<string> {
@@ -74,6 +74,12 @@ export async function runAnthropic(ctx: RunContext): Promise<string> {
 
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: taskPrompt(ctx.task, ctx.history) }];
   let lastText = '';
+  const system = systemPrompt(ctx.agent, ctx.settings, ctx.screens);
+  const tools: NonNullable<Anthropic.MessageCreateParams['tools']> = [{ type: 'computer_toolset_20260801' }];
+  // El toolset puede convivir con herramientas propias (solo no con una llamada "computer").
+  if (ctx.screens.length > 1) {
+    tools.push({ name: SWITCH_SCREEN_TOOL.name, description: SWITCH_SCREEN_TOOL.description, input_schema: SWITCH_SCREEN_TOOL.schema, strict: true });
+  }
 
   for (let step = 1; step <= ctx.settings.maxSteps; step++) {
     ctx.onStep(step);
@@ -81,9 +87,9 @@ export async function runAnthropic(ctx: RunContext): Promise<string> {
       {
         model,
         max_tokens: 32000,
-        system: systemPrompt(ctx.agent, ctx.settings),
+        system,
         messages,
-        tools: [{ type: 'computer_toolset_20260801' }],
+        tools,
         thinking: { type: 'adaptive', display: 'summarized' },
         output_config: { effort: ctx.agent.effort },
         // Las capturas se reenvían en cada turno: la caché abarata mucho el bucle.
@@ -128,13 +134,19 @@ export async function runAnthropic(ctx: RunContext): Promise<string> {
         results.push({ ...base, is_error: true, content: 'Not executed: an earlier computer action in this turn failed.' });
         continue;
       }
-      if (use.toolset_name !== 'computer') {
+      const input = (use.input ?? {}) as Input;
+      let action: Action;
+      if (use.toolset_name === 'computer') {
+        action = toAction(use.name, input);
+      } else if (use.name === SWITCH_SCREEN_TOOL.name && !use.toolset_name) {
+        action = { kind: 'switch_screen', screen: num(input.screen) ?? 0 };
+      } else {
         results.push({ ...base, is_error: true, content: `Herramienta desconocida: ${use.name}` });
         failed = true;
         continue;
       }
       try {
-        const r = await ctx.desktop.perform(toAction(use.name, (use.input ?? {}) as Input));
+        const r = await ctx.desktop.perform(action);
         results.push({ ...base, content: toContent(r) });
       } catch (e) {
         if (e instanceof StopError) throw e;
@@ -151,7 +163,7 @@ export async function runAnthropic(ctx: RunContext): Promise<string> {
     }
     // Si el lote no terminó con una captura, adjuntamos una para que el modelo vea el resultado.
     const lastUse = uses[uses.length - 1];
-    if (!failed && lastUse.name !== 'screenshot' && lastUse.name !== 'zoom') {
+    if (!failed && !['screenshot', 'zoom', SWITCH_SCREEN_TOOL.name].includes(lastUse.name)) {
       const shot = await ctx.desktop.screenshot();
       const last = results[results.length - 1];
       const content = Array.isArray(last.content) ? last.content : [];

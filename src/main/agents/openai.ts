@@ -2,12 +2,14 @@ import OpenAI from 'openai';
 import type {
   ComputerAction,
   ResponseComputerToolCall,
+  ResponseFunctionToolCall,
   ResponseInputItem,
+  Tool,
 } from 'openai/resources/responses/responses';
 import { DEFAULT_MODELS } from '../../shared/defaults';
 import { DeniedError, StopError, type Action } from '../desktop';
 import { getSecret } from '../settings';
-import { systemPrompt, taskPrompt, type RunContext } from './context';
+import { SWITCH_SCREEN_TOOL, systemPrompt, taskPrompt, type RunContext } from './context';
 
 type AnyAction = ComputerAction | NonNullable<ResponseComputerToolCall['action']>;
 
@@ -42,7 +44,11 @@ export async function runOpenAI(ctx: RunContext): Promise<string> {
   if (!apiKey) throw new Error('Falta la API key de OpenAI. Añádela en Ajustes.');
   const client = new OpenAI({ apiKey });
   const model = ctx.agent.model || DEFAULT_MODELS.openai;
-  const instructions = systemPrompt(ctx.agent, ctx.settings);
+  const instructions = systemPrompt(ctx.agent, ctx.settings, ctx.screens);
+  const tools: Tool[] = [{ type: 'computer' }];
+  if (ctx.screens.length > 1) {
+    tools.push({ type: 'function', name: SWITCH_SCREEN_TOOL.name, description: SWITCH_SCREEN_TOOL.description, parameters: SWITCH_SCREEN_TOOL.schema, strict: true });
+  }
 
   let previousId: string | undefined;
   let input: ResponseInputItem[] = [{ role: 'user', content: taskPrompt(ctx.task, ctx.history) }];
@@ -58,7 +64,7 @@ export async function runOpenAI(ctx: RunContext): Promise<string> {
           instructions,
           input,
           previous_response_id: previousId,
-          tools: [{ type: 'computer' }],
+          tools,
           reasoning: { effort: ctx.agent.effort === 'max' || ctx.agent.effort === 'xhigh' ? 'high' : ctx.agent.effort, summary: 'auto' },
           truncation: 'auto',
         },
@@ -86,9 +92,26 @@ export async function runOpenAI(ctx: RunContext): Promise<string> {
     }
 
     const calls = resp.output.filter((o): o is ResponseComputerToolCall => o.type === 'computer_call');
-    if (calls.length === 0) return lastText || 'Hecho.';
+    const fnCalls = resp.output.filter((o): o is ResponseFunctionToolCall => o.type === 'function_call');
+    if (calls.length === 0 && fnCalls.length === 0) return lastText || 'Hecho.';
 
     input = [];
+    for (const fn of fnCalls) {
+      let output: string;
+      if (fn.name !== SWITCH_SCREEN_TOOL.name) {
+        output = `Herramienta desconocida: ${fn.name}`;
+      } else {
+        try {
+          const args = JSON.parse(fn.arguments || '{}') as { screen?: unknown };
+          const r = await ctx.desktop.perform({ kind: 'switch_screen', screen: Number(args.screen) });
+          output = `${r.text ?? 'OK'} Haz una captura para verla.`;
+        } catch (e) {
+          if (e instanceof StopError || e instanceof DeniedError) throw e;
+          output = `Error: ${(e as Error).message}`;
+        }
+      }
+      input.push({ type: 'function_call_output', call_id: fn.call_id, output });
+    }
     for (const call of calls) {
       // OpenAI marca a veces acciones como sensibles: siempre se lo preguntamos al usuario.
       if (call.pending_safety_checks.length) {

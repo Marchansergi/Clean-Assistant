@@ -69,6 +69,7 @@ export class Runner {
       emit,
       confirm: (title, detail) => this.deps.confirm(agentId, title, detail),
       onStep: (step) => this.deps.state({ status: 'running', agentId, step }),
+      screens: this.deps.desktop.screens(),
     };
 
     let result = '';

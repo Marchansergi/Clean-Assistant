@@ -88,6 +88,11 @@ export const BRIDGE_TOOLS: BridgeTool[] = [
     },
   },
   {
+    name: 'switch_screen',
+    description: 'Cambia la pantalla en la que trabajas (1 = principal). Después, las capturas y todas las coordenadas son las de esa pantalla. Devuelve una captura de la nueva pantalla.',
+    inputSchema: { type: 'object', properties: { screen: { type: 'integer', minimum: 1 } }, required: ['screen'], additionalProperties: false },
+  },
+  {
     name: 'wait',
     description: 'Espera unos segundos (por ejemplo mientras carga una app) y devuelve una captura.',
     inputSchema: { type: 'object', properties: { seconds: { type: 'number', minimum: 0, maximum: 30 } }, required: ['seconds'], additionalProperties: false },

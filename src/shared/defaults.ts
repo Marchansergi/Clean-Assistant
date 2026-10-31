@@ -71,4 +71,7 @@ export const DEFAULT_SETTINGS: Settings = {
   claudeCliPath: 'claude',
   codexCliPath: 'codex',
   openAtLogin: false,
+  multiScreen: true,
+  sounds: true,
+  soundVolume: 60,
 };

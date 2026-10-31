@@ -1,5 +1,5 @@
 import type { OverlayMsg, Settings } from '../shared/types';
-import { geometry, modelToPhys, physToDip, physToModel, screenshot, zoom, type Geometry, type Shot } from './screen-capture';
+import { describeDisplays, geometry, modelToPhys, physToDip, physToModel, screenshot, zoom, type Geometry, type Shot } from './screen-capture';
 import { splitCombo, type MouseButton, type WinInput } from './input/win-input';
 
 /** Acción normalizada: todos los proveedores traducen sus llamadas a esto. Coordenadas en espacio de modelo. */
@@ -16,7 +16,9 @@ export type Action =
   | { kind: 'type'; text: string }
   | { kind: 'key'; keys: string[]; repeat: number }
   | { kind: 'hold_key'; keys: string[]; seconds: number }
-  | { kind: 'wait'; seconds: number };
+  | { kind: 'wait'; seconds: number }
+  /** Cambia la pantalla en la que trabaja el agente (1 = principal). */
+  | { kind: 'switch_screen'; screen: number };
 
 export interface ActionResult {
   text?: string;
@@ -38,7 +40,10 @@ export class DeniedError extends Error {
 export interface DesktopDeps {
   input: WinInput;
   settings: () => Settings;
-  overlay: (msg: OverlayMsg) => void;
+  /** Mensaje para la capa del cursor de una pantalla (sin pantalla = todas). */
+  overlay: (msg: OverlayMsg, displayId?: number) => void;
+  /** El agente ha pasado de una pantalla a otra. */
+  onScreenChange: (fromDisplayId: number, toDisplayId: number) => void;
   /** Pide permiso al usuario; resuelve true si acepta. */
   confirm: (title: string, detail: string) => Promise<boolean>;
   onAction: (label: string, icon: string) => void;
@@ -78,12 +83,13 @@ export function describe(a: Action): { label: string; icon: string } {
     case 'key': return { label: `Pulsando ${a.keys.join('+')}${a.repeat > 1 ? ` ×${a.repeat}` : ''}`, icon: '⌨️' };
     case 'hold_key': return { label: `Manteniendo ${a.keys.join('+')} ${a.seconds}s`, icon: '⌨️' };
     case 'wait': return { label: `Esperando ${a.seconds}s`, icon: '⏳' };
+    case 'switch_screen': return { label: `Cambiando a la pantalla ${a.screen}`, icon: '🖥️' };
   }
 }
 
 function needsConfirm(a: Action, mode: Settings['confirmMode']): boolean {
   if (mode === 'never') return false;
-  const passive = a.kind === 'screenshot' || a.kind === 'zoom' || a.kind === 'wait' || a.kind === 'cursor_position';
+  const passive = a.kind === 'screenshot' || a.kind === 'zoom' || a.kind === 'wait' || a.kind === 'cursor_position' || a.kind === 'switch_screen';
   if (mode === 'always') return !passive;
   // 'keyboard': todo lo que escribe o pulsa teclas (enviar formularios, mensajes, atajos).
   return a.kind === 'type' || a.kind === 'key' || a.kind === 'hold_key';
@@ -93,15 +99,35 @@ function needsConfirm(a: Action, mode: Settings['confirmMode']): boolean {
 export class Desktop {
   private signal: AbortSignal | undefined;
   private dipCursor: { x: number; y: number } | null = null;
+  /** Pantalla en la que trabaja el agente ahora mismo (0 = principal). */
+  private screenIndex = 0;
 
   constructor(private deps: DesktopDeps) {}
 
+  /** Cada tarea empieza en la pantalla principal. */
   bind(signal: AbortSignal) {
     this.signal = signal;
+    this.screenIndex = 0;
+    this.dipCursor = null;
   }
 
   geometry(): Geometry {
-    return geometry(this.deps.settings().captureMaxEdge);
+    const s = this.deps.settings();
+    return geometry(s.captureMaxEdge, s.multiScreen ? this.screenIndex : 0);
+  }
+
+  /** Pantallas que puede usar el agente, descritas para su prompt. */
+  screens(): string[] {
+    const all = describeDisplays();
+    return this.deps.settings().multiScreen ? all : all.slice(0, 1);
+  }
+
+  get activeDisplayId(): number {
+    return this.geometry().displayId;
+  }
+
+  private ov(msg: OverlayMsg) {
+    this.deps.overlay(msg, this.activeDisplayId);
   }
 
   private check() {
@@ -113,7 +139,7 @@ export class Desktop {
     const ms = this.deps.settings().cursorAnimMs;
     const dist = this.dipCursor ? Math.hypot(dip.x - this.dipCursor.x, dip.y - this.dipCursor.y) : 400;
     const duration = Math.round(Math.min(ms, Math.max(ms * 0.35, dist * 0.6)));
-    this.deps.overlay({ type: 'move', x: dip.x, y: dip.y, durationMs: duration });
+    this.ov({ type: 'move', x: dip.x, y: dip.y, durationMs: duration });
     this.dipCursor = dip;
     await sleep(duration, this.signal);
   }
@@ -137,7 +163,7 @@ export class Desktop {
       if (!ok) throw new DeniedError();
     }
     this.deps.onAction(d.label, d.icon);
-    this.deps.overlay({ type: 'status', text: d.label });
+    this.ov({ type: 'status', text: d.label });
 
     const g = this.geometry();
     const input = this.deps.input;
@@ -176,7 +202,7 @@ export class Desktop {
         }
         await input.keysDown(a.modifiers);
         try {
-          this.deps.overlay({ type: 'click', button: a.button, count: a.count });
+          this.ov({ type: 'click', button: a.button, count: a.count });
           await input.click(a.button, a.count);
         } finally {
           await input.keysUp(a.modifiers);
@@ -193,7 +219,7 @@ export class Desktop {
         await input.move(pts[0].x, pts[0].y);
         await input.keysDown(a.modifiers);
         await input.down('left');
-        this.deps.overlay({ type: 'drag', active: true });
+        this.ov({ type: 'drag', active: true });
         try {
           for (let i = 1; i < pts.length; i++) {
             const from = pts[i - 1];
@@ -203,7 +229,7 @@ export class Desktop {
               const x = from.x + ((to.x - from.x) * k) / steps;
               const y = from.y + ((to.y - from.y) * k) / steps;
               const dip = physToDip(g, x, y);
-              this.deps.overlay({ type: 'move', x: dip.x, y: dip.y, durationMs: 16 });
+              this.ov({ type: 'move', x: dip.x, y: dip.y, durationMs: 16 });
               this.dipCursor = dip;
               await input.move(x, y);
               await sleep(16);
@@ -212,7 +238,7 @@ export class Desktop {
         } finally {
           await input.up('left');
           await input.keysUp(a.modifiers);
-          this.deps.overlay({ type: 'drag', active: false });
+          this.ov({ type: 'drag', active: false });
         }
         await this.settle();
         return { text: 'OK' };
@@ -220,12 +246,12 @@ export class Desktop {
 
       case 'mouse_down':
         await input.down('left');
-        this.deps.overlay({ type: 'drag', active: true });
+        this.ov({ type: 'drag', active: true });
         return { text: 'OK' };
 
       case 'mouse_up':
         await input.up('left');
-        this.deps.overlay({ type: 'drag', active: false });
+        this.ov({ type: 'drag', active: false });
         await this.settle();
         return { text: 'OK' };
 
@@ -239,7 +265,7 @@ export class Desktop {
         const amount = Math.max(1, Math.min(50, Math.round(a.amount)));
         const horizontal = a.direction === 'left' || a.direction === 'right';
         const sign = a.direction === 'up' || a.direction === 'right' ? 1 : -1;
-        this.deps.overlay({ type: 'scroll', direction: a.direction });
+        this.ov({ type: 'scroll', direction: a.direction });
         await input.keysDown(a.modifiers);
         try {
           await input.wheel(sign * amount, horizontal);
@@ -252,24 +278,40 @@ export class Desktop {
       }
 
       case 'type': {
-        if (s.showKeyboard) this.deps.overlay({ type: 'keyboard', visible: true });
-        this.deps.overlay({ type: 'type', text: a.text, delayMs: s.typingDelayMs });
+        if (s.showKeyboard) this.ov({ type: 'keyboard', visible: true });
+        this.ov({ type: 'type', text: a.text, delayMs: s.typingDelayMs });
         await input.type(a.text, s.typingDelayMs);
         await this.settle();
         return { text: 'OK' };
       }
 
       case 'key': {
-        if (s.showKeyboard) this.deps.overlay({ type: 'keyboard', visible: true });
-        this.deps.overlay({ type: 'keys', keys: a.keys });
+        if (s.showKeyboard) this.ov({ type: 'keyboard', visible: true });
+        this.ov({ type: 'keys', keys: a.keys });
         await input.combo(a.keys, a.repeat);
         await this.settle();
         return { text: 'OK' };
       }
 
+      case 'switch_screen': {
+        const total = this.screens().length;
+        if (!Number.isInteger(a.screen) || a.screen < 1 || a.screen > total) {
+          throw new Error(total > 1 ? `Esa pantalla no existe: hay ${total} (de la 1 a la ${total}).` : 'Solo hay una pantalla disponible.');
+        }
+        const from = g.displayId;
+        this.screenIndex = a.screen - 1;
+        const next = this.geometry();
+        this.dipCursor = null;
+        if (next.displayId !== from) this.deps.onScreenChange(from, next.displayId);
+        return {
+          text: `Ahora estás en la pantalla ${a.screen} (${next.physW}×${next.physH}). Las coordenadas son las de esta captura.`,
+          image: await screenshot(next),
+        };
+      }
+
       case 'hold_key': {
-        if (s.showKeyboard) this.deps.overlay({ type: 'keyboard', visible: true });
-        this.deps.overlay({ type: 'keys', keys: a.keys });
+        if (s.showKeyboard) this.ov({ type: 'keyboard', visible: true });
+        this.ov({ type: 'keys', keys: a.keys });
         await input.keysDown(a.keys);
         try {
           await sleep(Math.min(300, Math.max(0, a.seconds)) * 1000, this.signal);

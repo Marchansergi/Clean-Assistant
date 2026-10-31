@@ -19,6 +19,7 @@ const api = {
   respondConfirm: (id: string, ok: boolean): Promise<void> => ipcRenderer.invoke('confirm:respond', id, ok),
   checkCli: (p: ProviderId): Promise<{ ok: boolean; message: string }> => ipcRenderer.invoke('cli:check', p),
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
+  listScreens: (): Promise<string[]> => ipcRenderer.invoke('screens:list'),
   onRunState: (cb: (s: RunStateMsg) => void) => on('run:state', cb),
   onAgentEvent: (cb: (m: AgentEventMsg) => void) => on('agent:event', cb),
   onConfirm: (cb: (r: ConfirmRequest) => void) => on('confirm:request', cb),

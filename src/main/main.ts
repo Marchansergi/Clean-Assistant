@@ -1,9 +1,10 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import crossSpawn from 'cross-spawn';
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray, type Display } from 'electron';
 import type { AgentEvent, AgentEventMsg, ConfirmRequest, OverlayMsg, ProviderId, RunStateMsg, SecretName, Settings } from '../shared/types';
 import { Desktop } from './desktop';
+import { describeDisplays } from './screen-capture';
 import { WinInput } from './input/win-input';
 import { Runner } from './agents/runner';
 import { getPublicSettings, getSettings, saveSettings, setSecret } from './settings';
@@ -15,7 +16,8 @@ const NOTCH_BUSY = { width: 420, height: 40 };
 const EXPANDED = { width: 500, height: 660 };
 
 let widget: BrowserWindow | null = null;
-let overlay: BrowserWindow | null = null;
+/** Una capa del cursor por pantalla (id de pantalla → ventana). */
+const overlays = new Map<number, BrowserWindow>();
 let tray: Tray | null = null;
 let expanded = false;
 let activeAgentId: string | null = null;
@@ -31,8 +33,20 @@ function sendWidget(channel: string, payload: unknown) {
   if (widget && !widget.isDestroyed()) widget.webContents.send(channel, payload);
 }
 
-function sendOverlay(msg: OverlayMsg) {
-  if (overlay && !overlay.isDestroyed()) overlay.webContents.send('overlay:msg', msg);
+/** Envía un mensaje a la capa de una pantalla, o a todas si no se indica. */
+function sendOverlay(msg: OverlayMsg, displayId?: number) {
+  for (const [id, w] of overlays) {
+    if ((displayId === undefined || id === displayId) && !w.isDestroyed()) w.webContents.send('overlay:msg', msg);
+  }
+}
+
+function eachOverlay(fn: (w: BrowserWindow) => void) {
+  for (const w of overlays.values()) if (!w.isDestroyed()) fn(w);
+}
+
+function agentOverlayInfo(agentId: string | null): OverlayMsg | null {
+  const agent = getSettings().agents.find((a) => a.id === agentId);
+  return agent ? { type: 'agent', agent: { name: agent.name, color: agent.color, mascot: agent.mascot, avatarDataUrl: agent.avatarDataUrl } } : null;
 }
 
 function widgetBounds(isExpanded: boolean) {
@@ -71,7 +85,7 @@ function applyCaptureProtection(s: Settings) {
   // En Windows 10 2004+ esto excluye la ventana de las capturas (WDA_EXCLUDEFROMCAPTURE),
   // así el agente no ve su propio cursor ni el teclado digital (que dejan pasar los clics).
   // El chat sí se ve a propósito: tapa una zona real de la pantalla y el agente debe esquivarla.
-  overlay?.setContentProtection(s.hideFromCapture);
+  eachOverlay((w) => w.setContentProtection(s.hideFromCapture));
 }
 
 function createWidget() {
@@ -90,6 +104,8 @@ function createWidget() {
     icon: asset('icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'widget.js'),
+      // Para que el sonido del notch suene también si se abre desde la bandeja o por una confirmación.
+      autoplayPolicy: 'no-user-gesture-required',
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -109,9 +125,9 @@ function createWidget() {
   widget.on('closed', () => (widget = null));
 }
 
-function createOverlay() {
-  const b = screen.getPrimaryDisplay().bounds;
-  overlay = new BrowserWindow({
+function createOverlay(d: Display): BrowserWindow {
+  const b = d.bounds;
+  const overlay = new BrowserWindow({
     x: b.x,
     y: b.y,
     width: b.width,
@@ -135,7 +151,31 @@ function createOverlay() {
   overlay.setIgnoreMouseEvents(true);
   overlay.setAlwaysOnTop(true, 'screen-saver');
   overlay.loadFile(renderer('overlay', 'index.html'));
-  overlay.on('closed', () => (overlay = null));
+  return overlay;
+}
+
+/** Crea (o vuelve a crear) una capa por cada pantalla conectada. */
+function createOverlays() {
+  eachOverlay((w) => w.destroy());
+  overlays.clear();
+  for (const d of screen.getAllDisplays()) overlays.set(d.id, createOverlay(d));
+  applyCaptureProtection(getSettings());
+  if (runner.busy) {
+    eachOverlay((w) => w.showInactive());
+    const info = agentOverlayInfo(activeAgentId);
+    const target = desktop.activeDisplayId;
+    if (info) overlays.get(target)?.webContents.once('did-finish-load', () => sendOverlay(info, target));
+  }
+}
+
+let displaysTimer: NodeJS.Timeout | undefined;
+/** Al conectar, quitar o reescalar un monitor: recolocar el notch y rehacer las capas. */
+function onDisplaysChanged() {
+  clearTimeout(displaysTimer);
+  displaysTimer = setTimeout(() => {
+    widget?.setBounds(widgetBounds(expanded));
+    createOverlays();
+  }, 400);
 }
 
 function createTray() {
@@ -190,6 +230,12 @@ const desktop = new Desktop({
   input,
   settings: getSettings,
   overlay: sendOverlay,
+  onScreenChange: (from, to) => {
+    // El brillo del borde y el cursor se mudan a la pantalla donde trabaja ahora el agente.
+    sendOverlay({ type: 'hide' }, from);
+    const info = agentOverlayInfo(activeAgentId);
+    if (info) sendOverlay(info, to);
+  },
   confirm: (title, detail) => confirm(activeAgentId ?? '', title, detail),
   onAction: (label, icon) => {
     if (activeAgentId) sendWidget('agent:event', { agentId: activeAgentId, taskId: '', event: { type: 'action', label, icon } } satisfies AgentEventMsg);
@@ -208,11 +254,12 @@ const runner = new Runner({
   onRunChange: (running, agentId) => {
     activeAgentId = agentId;
     if (running) {
-      const s = getSettings();
-      const agent = s.agents.find((a) => a.id === agentId);
-      if (agent) sendOverlay({ type: 'agent', agent: { name: agent.name, color: agent.color, mascot: agent.mascot, avatarDataUrl: agent.avatarDataUrl } });
-      overlay?.showInactive();
-      overlay?.setAlwaysOnTop(true, 'screen-saver');
+      const info = agentOverlayInfo(agentId);
+      if (info) sendOverlay(info, desktop.activeDisplayId);
+      eachOverlay((w) => {
+        w.showInactive();
+        w.setAlwaysOnTop(true, 'screen-saver');
+      });
       registerStopShortcut();
       // El chat no debe quedarse con el foco del teclado mientras el agente escribe en otras apps.
       widget?.setFocusable(false);
@@ -223,7 +270,7 @@ const runner = new Runner({
       widget?.setFocusable(true);
       sendOverlay({ type: 'hide' });
       setTimeout(() => {
-        if (!runner.busy) overlay?.hide();
+        if (!runner.busy) eachOverlay((w) => w.hide());
       }, 900);
     }
   },
@@ -282,6 +329,7 @@ function registerIpc() {
   });
   ipcMain.handle('cli:check', (_e, provider: ProviderId) => checkCli(provider));
   ipcMain.handle('app:quit', () => app.quit());
+  ipcMain.handle('screens:list', () => describeDisplays());
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -296,16 +344,13 @@ if (!app.requestSingleInstanceLock()) {
     app.setAppUserModelId('com.cleanassistant.app');
     registerIpc();
     createWidget();
-    createOverlay();
+    createOverlays();
     createTray();
-    applyCaptureProtection(getSettings());
     applyLoginItem(getSettings());
     input.warmUp();
-    screen.on('display-metrics-changed', () => {
-      widget?.setBounds(widgetBounds(expanded));
-      const b = screen.getPrimaryDisplay().bounds;
-      overlay?.setBounds(b);
-    });
+    screen.on('display-added', onDisplaysChanged);
+    screen.on('display-removed', onDisplaysChanged);
+    screen.on('display-metrics-changed', onDisplaysChanged);
   });
 
   app.on('window-all-closed', () => app.quit());

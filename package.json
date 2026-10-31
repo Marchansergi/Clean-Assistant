@@ -1,7 +1,7 @@
 {
   "name": "clean-assistant",
   "productName": "Clean Assistant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Mini agentes de escritorio (Claude y ChatGPT) que usan tu ordenador con un cursor propio.",
   "main": "dist/main/main.js",
   "private": true,

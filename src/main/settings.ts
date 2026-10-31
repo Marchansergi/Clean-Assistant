@@ -43,6 +43,7 @@ export function saveSettings(patch: Partial<Settings>): Settings {
   next.settleMs = clamp(next.settleMs, 0, 5000);
   next.cursorAnimMs = clamp(next.cursorAnimMs, 0, 3000);
   next.typingDelayMs = clamp(next.typingDelayMs, 0, 200);
+  next.soundVolume = clamp(next.soundVolume, 0, 100);
   cache = next;
   writeJson(settingsFile(), next);
   return next;

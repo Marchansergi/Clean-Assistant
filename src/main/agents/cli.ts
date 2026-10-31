@@ -36,6 +36,7 @@ function bridgeToAction(name: string, a: Record<string, unknown>): Action {
       if (typeof a.keys !== 'string') throw new Error('Falta keys');
       return { kind: 'key', keys: parseModifiers(a.keys), repeat: n(a.repeat, 1) };
     case 'wait': return { kind: 'wait', seconds: Math.min(30, n(a.seconds, 1)) };
+    case 'switch_screen': return { kind: 'switch_screen', screen: n(a.screen) };
   }
   throw new Error(`Herramienta desconocida: ${name}`);
 }
@@ -183,7 +184,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   );
 
   // El prompt de sistema va por stdin: cmd.exe no admite saltos de línea en argumentos.
-  const prompt = `${systemPrompt(ctx.agent, ctx.settings)}\n\nTienes las herramientas mcp__escritorio__* para ver y controlar la pantalla. No uses ninguna otra.\n\n---\n\n${taskPrompt(ctx.task, ctx.history)}`;
+  const prompt = `${systemPrompt(ctx.agent, ctx.settings, ctx.screens)}\n\nTienes las herramientas mcp__escritorio__* para ver y controlar la pantalla. No uses ninguna otra.\n\n---\n\n${taskPrompt(ctx.task, ctx.history)}`;
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -243,7 +244,7 @@ export async function runCodex(ctx: RunContext): Promise<string> {
   ];
   if (ctx.agent.model) args.push('-m', ctx.agent.model);
   args.push('-');
-  const prompt = `${systemPrompt(ctx.agent, ctx.settings)}\n\nUsa solo las herramientas MCP del servidor "escritorio" para ver y controlar la pantalla. No ejecutes comandos de terminal.\n\n---\n\n${taskPrompt(ctx.task, ctx.history)}`;
+  const prompt = `${systemPrompt(ctx.agent, ctx.settings, ctx.screens)}\n\nUsa solo las herramientas MCP del servidor "escritorio" para ver y controlar la pantalla. No ejecutes comandos de terminal.\n\n---\n\n${taskPrompt(ctx.task, ctx.history)}`;
 
   let finalText = '';
   let step = 0;

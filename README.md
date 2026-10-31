@@ -20,6 +20,8 @@ No necesita APIs de desarrollador de Spotify ni extensiones del navegador: el ag
 ## Qué hace
 
 - **Notch arriba en el centro**, negro y opaco: recogido muestra al agente y su modelo; mientras trabaja se ensancha y enseña en directo lo que está haciendo, con un botón para pararlo. Haz clic y se despliega hacia abajo con el chat, el selector de agentes, el menú y los ajustes. Si haces clic fuera, se recoge solo.
+- **Sonido** suave al abrir y cerrar el notch (con volumen ajustable o desactivable).
+- **Varias pantallas**: detecta tus monitores y el agente puede trabajar en cualquiera de ellos dentro de la misma tarea, saltando de uno a otro (el cursor y el brillo del borde se mueven con él). Hay un solo ratón y un solo teclado, así que hace las cosas en una pantalla cada vez, no en dos a la vez.
 - **Elige el modelo** de cada agente: Opus 5.5, Sonnet 5.5 o Haiku 5.5, tanto con API key como con la suscripción. Se cambia en un clic desde la cabecera del notch. Con la suscripción, **Haiku 5.5 es el que menos límite gasta**.
 - **Cursor del agente**: un puntero naranja (Claude) o blanco brillante (ChatGPT) con su nombre, que se desliza hasta donde va a hacer clic, con ondas al hacer clic y un borde brillante en la pantalla mientras trabaja.
 - **Teclado digital** en pantalla que ilumina las teclas y muestra en tiempo real lo que el agente va escribiendo.
@@ -111,7 +113,7 @@ src/
 
 ## Limitaciones conocidas
 
-- **Solo Windows** y **solo la pantalla principal**.
+- **Solo Windows.** El notch está siempre en la pantalla principal.
 - El notch tapa una franja pequeña arriba en el centro (donde a veces están las pestañas del navegador). El agente lo ve en sus capturas y lo esquiva, pero si una pestaña queda justo debajo, tendrá que usar atajos de teclado.
 - **Un agente a la vez**: dos agentes con un solo ratón real se pelearían.
 - Las apps que se ejecutan como administrador no aceptan clics de una app sin privilegios (lo impide Windows). Tampoco funciona sobre la pantalla de bloqueo ni sobre los avisos de UAC.

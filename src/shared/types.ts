@@ -44,6 +44,12 @@ export interface Settings {
   codexCliPath: string;
   /** Abrir la app al iniciar sesión en Windows. */
   openAtLogin: boolean;
+  /** Permitir que el agente use todas las pantallas (si no, solo la principal). */
+  multiScreen: boolean;
+  /** Sonido al abrir y cerrar el notch. */
+  sounds: boolean;
+  /** Volumen de los sonidos (0-100). */
+  soundVolume: number;
 }
 
 /** Lo que ve la vista: los ajustes más si hay claves guardadas (nunca las claves). */
