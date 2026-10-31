@@ -1,20 +1,26 @@
 # Clean Assistant
 
-Mini agentes de escritorio para **Windows**. Una ventanita abajo a la derecha donde le pides cosas a **Clau** (Claude) o a **Chati** (ChatGPT), y ellos usan tu ordenador con su propio cursor de color mientras ves en pantalla lo que escriben.
+Mini agentes de escritorio para **Windows**. Un **notch negro arriba en el centro** de la pantalla donde le pides cosas a **Clau** (Claude) o a **Chati** (ChatGPT), y ellos usan tu ordenador con su propio cursor de color mientras ves en pantalla lo que escriben.
 
 > «Abre Spotify y pon una canción que me guste» · «Busca en Google las noticias de hoy» · «Abre Firefox y mira el tiempo»
 
 No necesita APIs de desarrollador de Spotify ni extensiones del navegador: el agente **ve capturas de tu pantalla** y **mueve el ratón y pulsa teclas** como lo harías tú, así que funciona con cualquier programa.
 
 <p>
-  <img src="docs/img/widget.png" width="300" alt="Widget">
-  <img src="docs/img/widget-tarea.png" width="300" alt="Widget durante una tarea">
+  <img src="docs/img/notch.png" height="44" alt="Notch recogido">
+  &nbsp;
+  <img src="docs/img/notch-trabajando.png" height="44" alt="Notch mientras trabaja">
+</p>
+<p>
+  <img src="docs/img/notch-abierto.png" width="300" alt="Notch abierto">
+  <img src="docs/img/notch-tarea.png" width="300" alt="Notch durante una tarea">
 </p>
 <img src="docs/img/capa.png" width="620" alt="Cursor del agente y teclado digital (en Windows el fondo es transparente)">
 
 ## Qué hace
 
-- **Widget flotante** abajo a la derecha: chat, selector de agentes, menú y ajustes. Se minimiza a una burbuja con la cara del agente.
+- **Notch arriba en el centro**, negro y opaco: recogido muestra al agente y su modelo; mientras trabaja se ensancha y enseña en directo lo que está haciendo, con un botón para pararlo. Haz clic y se despliega hacia abajo con el chat, el selector de agentes, el menú y los ajustes. Si haces clic fuera, se recoge solo.
+- **Elige el modelo** de cada agente: Opus 5.5, Sonnet 5.5 o Haiku 5.5, tanto con API key como con la suscripción. Se cambia en un clic desde la cabecera del notch. Con la suscripción, **Haiku 5.5 es el que menos límite gasta**.
 - **Cursor del agente**: un puntero naranja (Claude) o blanco brillante (ChatGPT) con su nombre, que se desliza hasta donde va a hacer clic, con ondas al hacer clic y un borde brillante en la pantalla mientras trabaja.
 - **Teclado digital** en pantalla que ilumina las teclas y muestra en tiempo real lo que el agente va escribiendo.
 - **Ves lo que piensa**: el razonamiento resumido, sus mensajes y cada acción («Clic en…», «Escribiendo…») aparecen en directo en el chat.
@@ -27,7 +33,7 @@ No necesita APIs de desarrollador de Spotify ni extensiones del navegador: el ag
 | Cerebro | Qué necesitas | Estado |
 |---|---|---|
 | **Claude · API key** | Una API key de Anthropic ([console.anthropic.com](https://console.anthropic.com/settings/keys)). Se paga por uso, aparte de la suscripción. | Recomendado. Usa el toolset oficial de *computer use* (`claude-opus-5-5` por defecto). |
-| **Claude · suscripción (Claude Code)** | Tener [Claude Code](https://code.claude.com) instalado y con la sesión de tu cuenta Pro/Max iniciada. | Funciona por el CLI oficial: la app le da herramientas de pantalla, ratón y teclado mediante un servidor MCP local. |
+| **Claude · suscripción (Claude Code)** | Tener [Claude Code](https://code.claude.com) instalado y con la sesión de tu cuenta Pro/Max iniciada. | **Sin API key.** Funciona por el CLI oficial: la app le da herramientas de pantalla, ratón y teclado mediante un servidor MCP local. Es el cerebro por defecto de Clau (con Haiku 5.5). |
 | **ChatGPT · API key** | Una API key de OpenAI ([platform.openai.com](https://platform.openai.com/api-keys)). Pago por uso. | Usa la herramienta `computer` de la Responses API (`gpt-5.5` por defecto; cámbialo si tu cuenta usa otro modelo con esa herramienta). |
 | **ChatGPT · suscripción (Codex CLI)** | Tener [Codex CLI](https://github.com/openai/codex) instalado y con la sesión iniciada (`codex login`). | **Experimental**: depende de que tu versión de Codex pase las imágenes de las herramientas MCP al modelo. |
 
@@ -35,7 +41,15 @@ No necesita APIs de desarrollador de Spotify ni extensiones del navegador: el ag
 
 Las API keys se guardan **cifradas con DPAPI** (ligadas a tu usuario de Windows) y nunca se envían a la interfaz. Si no hay ninguna guardada, se usan las variables de entorno `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 
-## Instalación (desarrollo)
+## Instalación
+
+Descarga `Clean-Assistant-Setup-x.y.z.exe` y ábrelo. El asistente te deja elegir la carpeta y crea accesos directos en el escritorio y en el menú Inicio. Se desinstala desde *Configuración → Aplicaciones*.
+
+> El instalador no está firmado con un certificado de pago, así que Windows SmartScreen mostrará «Windows protegió su PC». Pulsa **Más información → Ejecutar de todas formas**.
+
+Para generar el instalador en GitHub sin tener nada instalado: pestaña **Actions → Instalador de Windows → Run workflow**, y descarga el `.exe` desde los artefactos. Si subes una etiqueta `v*`, se publica además como *release*.
+
+## Desarrollo
 
 Requisitos: Windows 10 (2004 o posterior) u 11, y [Node.js 20+](https://nodejs.org).
 
@@ -47,7 +61,7 @@ npm install
 npm start
 ```
 
-Para generar el instalador (`.exe` NSIS y versión portable en `release/`):
+Para generar el instalador (`release/Clean-Assistant-Setup-x.y.z.exe`):
 
 ```bash
 npm run dist
@@ -56,9 +70,9 @@ npm run dist
 ## Uso
 
 1. Abre **⋯ → Ajustes** y pega tu API key, o comprueba que Claude Code / Codex están instalados.
-2. Elige un agente en la fila de chips (Clau, Chati o los tuyos).
-3. Escribe lo que quieres y pulsa Enter.
-4. Para pararlo: botón **Detener** o el atajo global **Ctrl+Alt+Q** (configurable). También desde el icono de la bandeja.
+2. Haz clic en el notch, elige agente (Clau, Chati o los tuyos) y modelo en la cabecera.
+3. Escribe lo que quieres y pulsa Enter. Puedes recoger el notch: seguirás viendo qué hace.
+4. Para pararlo: el botón ■ del notch, **Detener** en el chat o el atajo global **Ctrl+Alt+Q** (configurable). También desde el icono de la bandeja.
 
 ## Seguridad: léelo
 
@@ -98,6 +112,7 @@ src/
 ## Limitaciones conocidas
 
 - **Solo Windows** y **solo la pantalla principal**.
+- El notch tapa una franja pequeña arriba en el centro (donde a veces están las pestañas del navegador). El agente lo ve en sus capturas y lo esquiva, pero si una pestaña queda justo debajo, tendrá que usar atajos de teclado.
 - **Un agente a la vez**: dos agentes con un solo ratón real se pelearían.
 - Las apps que se ejecutan como administrador no aceptan clics de una app sin privilegios (lo impide Windows). Tampoco funciona sobre la pantalla de bloqueo ni sobre los avisos de UAC.
 - Las mascotas son diseños propios **inspirados** en los logos, no los logos oficiales (son marcas registradas). Si es para tu uso personal, puedes subir el icono que quieras en el editor de cada agente.

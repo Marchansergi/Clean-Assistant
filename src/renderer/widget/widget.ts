@@ -1,5 +1,5 @@
 import type { WidgetApi } from '../../preload/widget';
-import { DEFAULT_MODELS, PROVIDER_LABELS } from '../../shared/defaults';
+import { CLAUDE_MODELS, DEFAULT_MODELS, OPENAI_MODEL_SUGGESTIONS, PROVIDER_LABELS, isClaudeProvider, modelLabel } from '../../shared/defaults';
 import type { AgentEvent, AgentProfile, ConfirmRequest, ProviderId, PublicSettings, RunStateMsg, Settings } from '../../shared/types';
 import { avatarHtml } from '../common/mascots';
 
@@ -48,6 +48,11 @@ let run: RunStateMsg = { status: 'idle', agentId: null, step: 0 };
 let view: 'chat' | 'agents' | 'settings' = 'chat';
 let pendingConfirm: ConfirmRequest | null = null;
 let editingAgentId: string | null = null;
+let lastAction = '';
+let doneFlash = '';
+let doneTimer: number | undefined;
+let isOpen = false;
+let shrinkTimer: number | undefined;
 const chats = new Map<string, ChatItem[]>();
 
 const activeAgent = () => settings.agents.find((a) => a.id === settings.activeAgentId) ?? settings.agents[0];
@@ -65,12 +70,10 @@ function luminance(hex: string): number {
 }
 
 function applyTheme() {
-  const a = activeAgent();
+  // Siempre negro; el acento es el color del agente que trabaja (o del activo).
+  const a = agentById(run.agentId) ?? activeAgent();
   const root = document.documentElement;
-  root.dataset.theme = settings.theme;
-  // Un agente blanco brillante usa un acento claro con texto oscuro.
-  const light = luminance(a.color) > 0.85;
-  const accent = light ? (window.matchMedia('(prefers-color-scheme: light)').matches && settings.theme !== 'dark' ? '#2b2733' : '#f4fbff') : a.color;
+  const accent = luminance(a.color) > 0.85 ? '#f4fbff' : a.color;
   root.style.setProperty('--accent', accent);
   root.style.setProperty('--accent-fg', luminance(accent) > 0.6 ? '#1d1a1f' : '#ffffff');
   root.style.setProperty('--accent-soft', `color-mix(in srgb, ${accent} 18%, transparent)`);
@@ -93,12 +96,48 @@ function renderHeader() {
   } else {
     label.textContent = `Lista · ${PROVIDER_LABELS[a.provider]}`;
   }
-  document.body.classList.toggle('running', run.status !== 'idle');
-  const bubbleAgent = runningAgent ?? a;
-  document.querySelector('.bubble-avatar')!.innerHTML = avatarHtml(bubbleAgent);
-  const badge = document.querySelector('.bubble-badge') as HTMLElement;
-  badge.classList.toggle('hidden', run.status === 'idle' || !run.step);
-  badge.textContent = String(run.step);
+  const busy = run.status !== 'idle';
+  document.body.classList.toggle('running', busy);
+  // El notch recogido muestra al agente que trabaja y lo que está haciendo ahora mismo.
+  const barAgent = runningAgent ?? a;
+  $('barAvatar').innerHTML = avatarHtml(barAgent);
+  $('barName').textContent = barAgent.name;
+  $('barStatus').textContent = run.status === 'stopping'
+    ? 'Deteniendo…'
+    : busy ? (lastAction || 'Pensando…') : doneFlash || modelLabel(a.model || DEFAULT_MODELS[a.provider]);
+  document.documentElement.style.setProperty('--collapsed-w', busy ? '420px' : '248px');
+  renderModelSelect();
+}
+
+/** Selector rápido de modelo en la cabecera. */
+function renderModelSelect() {
+  const a = activeAgent();
+  const sel = $('modelSelect') as HTMLSelectElement;
+  const current = a.model;
+  const options: { value: string; label: string }[] = isClaudeProvider(a.provider)
+    ? CLAUDE_MODELS.map((m) => ({ value: m.id, label: m.label }))
+    : OPENAI_MODEL_SUGGESTIONS.map((m) => ({ value: m, label: m }));
+  if (a.provider === 'claude-code' || a.provider === 'codex') options.unshift({ value: '', label: 'Por defecto' });
+  if (!options.some((o) => o.value === current)) options.push({ value: current, label: modelLabel(current) });
+  sel.replaceChildren(...options.map((o) => h('option', { value: o.value, selected: o.value === current }, o.label)));
+  sel.disabled = run.status !== 'idle';
+}
+
+/** Mensaje breve en el notch recogido cuando un agente termina. */
+function flashDone(text: string) {
+  doneFlash = text.length > 60 ? text.slice(0, 57) + '…' : text;
+  window.clearTimeout(doneTimer);
+  doneTimer = window.setTimeout(() => {
+    doneFlash = '';
+    renderHeader();
+  }, 7000);
+  renderHeader();
+}
+
+async function setActiveModel(model: string) {
+  const a = activeAgent();
+  settings = await api.saveSettings({ agents: settings.agents.map((x) => (x.id === a.id ? { ...x, model } : x)) });
+  renderAll();
 }
 
 function renderSwitch() {
@@ -232,6 +271,8 @@ function onAgentEvent(agentId: string, ev: AgentEvent) {
       closeLive(items);
       if (last?.kind === 'agent') last.done = true;
       push({ kind: 'action', text: ev.label, icon: ev.icon });
+      lastAction = ev.label;
+      renderHeader();
       break;
     case 'info':
       closeLive(items);
@@ -248,6 +289,7 @@ function onAgentEvent(agentId: string, ev: AgentEvent) {
       if (!shown || !shown.text.trim() || !ev.text.includes(shown.text.trim().slice(0, 40))) {
         if (ev.text.trim()) push({ kind: 'agent', text: ev.text, done: true });
       }
+      flashDone(ev.text.trim() ? `✓ ${ev.text.trim().split('\n')[0]}` : '✓ Hecho');
       const fin = items.slice().reverse().find((i): i is Extract<ChatItem, { kind: 'agent' }> => i.kind === 'agent');
       if (fin) {
         fin.done = true;
@@ -393,34 +435,51 @@ function agentEditor(a: AgentProfile): HTMLElement {
   const name = h('input', { type: 'text', value: draft.name, maxlength: 24 });
   name.addEventListener('input', () => { draft.name = name.value; });
 
-  const provider = h('select', {}, ...(Object.keys(PROVIDER_LABELS) as ProviderId[]).map((p) =>
+  const provider = h('select', { class: 'input' }, ...(Object.keys(PROVIDER_LABELS) as ProviderId[]).map((p) =>
     h('option', { value: p, selected: p === draft.provider }, PROVIDER_LABELS[p])));
-  const model = h('input', { type: 'text', value: draft.model, placeholder: DEFAULT_MODELS[draft.provider] || 'Por defecto del CLI' });
+  // Modelo: tarjetas para Claude (Opus / Sonnet / Haiku) y texto libre para OpenAI.
+  const modelBox = h('div');
+  const renderModelPicker = () => {
+    modelBox.replaceChildren();
+    if (isClaudeProvider(draft.provider)) {
+      if (!CLAUDE_MODELS.some((m) => m.id === draft.model)) draft.model = DEFAULT_MODELS[draft.provider];
+      modelBox.append(h('div', { class: 'model-cards' }, ...CLAUDE_MODELS.map((m) =>
+        h('button', {
+          class: `model-card ${draft.model === m.id ? 'active' : ''}`,
+          onclick: () => { draft.model = m.id; renderModelPicker(); },
+        }, h('b', {}, m.label), h('span', {}, m.hint)))));
+      if (draft.provider === 'claude-code') {
+        modelBox.append(h('div', { class: 'hint', style: 'margin-top:6px' }, 'Con la suscripción, Haiku es el que menos límite gasta.'));
+      }
+    } else {
+      const input = h('input', { type: 'text', value: draft.model, list: 'openaiModels', placeholder: DEFAULT_MODELS[draft.provider] || 'Por defecto del CLI' });
+      input.addEventListener('input', () => { draft.model = input.value.trim(); });
+      modelBox.append(input, h('datalist', { id: 'openaiModels' }, ...OPENAI_MODEL_SUGGESTIONS.map((m) => h('option', { value: m }))));
+    }
+  };
+  renderModelPicker();
   const providerHint = h('div', { class: 'hint' });
   const updateProviderHint = () => {
     providerHint.textContent = ({
       anthropic: 'Usa tu API key de Anthropic (pago por uso, aparte de la suscripción). Modelos con computer use: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.',
       openai: 'Usa tu API key de OpenAI (pago por uso). El modelo debe admitir la herramienta "computer" de la Responses API.',
-      'claude-code': 'Usa Claude Code instalado en tu PC con tu sesión de Pro/Max. Modelo: alias como "opus" o "sonnet", o vacío.',
+      'claude-code': 'Usa Claude Code instalado en tu PC con tu sesión de Pro/Max. No necesita API key.',
       codex: 'Experimental. Usa Codex CLI con tu cuenta de ChatGPT. Puede que tu versión de Codex no pase las capturas al modelo.',
     } as Record<ProviderId, string>)[draft.provider];
   };
   updateProviderHint();
   provider.addEventListener('change', () => {
     const p = provider.value as ProviderId;
-    if (!draft.model || draft.model === DEFAULT_MODELS[draft.provider]) {
-      draft.model = DEFAULT_MODELS[p];
-      model.value = draft.model;
-    }
+    const keep = isClaudeProvider(p) && isClaudeProvider(draft.provider) && CLAUDE_MODELS.some((m) => m.id === draft.model);
+    if (!keep) draft.model = DEFAULT_MODELS[p];
     draft.provider = p;
-    model.placeholder = DEFAULT_MODELS[p] || 'Por defecto del CLI';
     updateProviderHint();
+    renderModelPicker();
   });
-  model.addEventListener('input', () => { draft.model = model.value.trim(); });
 
   const color = h('input', { type: 'color', value: draft.color });
   color.addEventListener('input', () => { draft.color = color.value; refresh(); });
-  const mascot = h('select', {},
+  const mascot = h('select', { class: 'input' },
     h('option', { value: 'claude', selected: draft.mascot === 'claude' }, 'Estrellita (estilo Claude)'),
     h('option', { value: 'chatgpt', selected: draft.mascot === 'chatgpt' }, 'Nudito (estilo ChatGPT)'));
   mascot.addEventListener('change', () => { draft.mascot = mascot.value as AgentProfile['mascot']; refresh(); });
@@ -435,7 +494,7 @@ function agentEditor(a: AgentProfile): HTMLElement {
     reader.readAsDataURL(f);
   });
 
-  const effort = h('select', {}, ...(['low', 'medium', 'high', 'xhigh', 'max'] as const).map((e) =>
+  const effort = h('select', { class: 'input' }, ...(['low', 'medium', 'high', 'xhigh', 'max'] as const).map((e) =>
     h('option', { value: e, selected: e === draft.effort }, ({ low: 'Rápido', medium: 'Equilibrado', high: 'Cuidadoso', xhigh: 'Muy cuidadoso', max: 'Máximo' })[e])));
   effort.addEventListener('change', () => { draft.effort = effort.value as AgentProfile['effort']; });
 
@@ -475,7 +534,7 @@ function agentEditor(a: AgentProfile): HTMLElement {
     ),
     h('div', { class: 'group' },
       h('div', { class: 'field' }, h('label', {}, 'Cerebro'), provider, providerHint),
-      h('div', { class: 'field' }, h('label', {}, 'Modelo'), model),
+      h('div', { class: 'field' }, h('label', {}, 'Modelo'), modelBox),
       h('div', { class: 'field' }, h('label', {}, 'Esfuerzo'), effort,
         h('div', { class: 'hint' }, 'Más esfuerzo = más fiable pero más lento y caro.')),
       h('div', { class: 'field' }, h('label', {}, 'Personalidad e instrucciones'), extra),
@@ -562,7 +621,7 @@ function renderSettings() {
   about.value = s.aboutMe;
   about.addEventListener('input', () => saveLater({ aboutMe: about.value }));
 
-  const confirmSel = h('select', {},
+  const confirmSel = h('select', { class: 'input' },
     h('option', { value: 'never', selected: s.confirmMode === 'never' }, 'Autónomo: no preguntar nunca'),
     h('option', { value: 'keyboard', selected: s.confirmMode === 'keyboard' }, 'Preguntar antes de escribir o pulsar teclas'),
     h('option', { value: 'always', selected: s.confirmMode === 'always' }, 'Preguntar antes de cada acción'));
@@ -574,15 +633,10 @@ function renderSettings() {
   const shortcut = h('input', { type: 'text', value: s.stopShortcut });
   shortcut.addEventListener('change', () => saveLater({ stopShortcut: shortcut.value.trim() || 'Control+Alt+Q' }));
 
-  const quality = h('select', {}, ...[[1024, 'Ligera (más barata)'], [1366, 'Normal'], [1568, 'Alta (recomendada)'], [2000, 'Máxima']].map(([v, l]) =>
+  const quality = h('select', { class: 'input' }, ...[[1024, 'Ligera (más barata)'], [1366, 'Normal'], [1568, 'Alta (recomendada)'], [2000, 'Máxima']].map(([v, l]) =>
     h('option', { value: v, selected: s.captureMaxEdge === v }, String(l))));
   quality.addEventListener('change', () => saveLater({ captureMaxEdge: Number(quality.value) }));
 
-  const theme = h('select', {},
-    h('option', { value: 'auto', selected: s.theme === 'auto' }, 'Como Windows'),
-    h('option', { value: 'dark', selected: s.theme === 'dark' }, 'Oscuro'),
-    h('option', { value: 'light', selected: s.theme === 'light' }, 'Claro'));
-  theme.addEventListener('change', () => saveLater({ theme: theme.value as Settings['theme'] }));
 
   body.replaceChildren(
     h('div', { class: 'group' },
@@ -613,7 +667,7 @@ function renderSettings() {
       toggle('Ocultar el cursor y el teclado en las capturas', 'El agente no ve su propio cursor ni el teclado digital (el chat sí lo ve, para no hacer clic encima).', 'hideFromCapture'),
       h('div', { class: 'field' }, h('label', {}, 'Calidad de captura'), quality),
       range('Espera tras cada acción', 'settleMs', 0, 2000, 50, 'ms'),
-      h('div', { class: 'field' }, h('label', {}, 'Tema'), theme)),
+      toggle('Abrir al iniciar Windows', 'El notch aparece arriba en cuanto enciendes el PC.', 'openAtLogin')),
   );
 }
 
@@ -622,8 +676,13 @@ function renderSettings() {
 async function init() {
   settings = await api.getSettings();
 
-  $('bubble').addEventListener('click', () => void api.setExpanded(true));
+  $('bar').addEventListener('click', () => void api.setExpanded(true));
+  $('barStop').addEventListener('click', (e) => {
+    e.stopPropagation();
+    void api.stopTask();
+  });
   $('minBtn').addEventListener('click', () => void api.setExpanded(false));
+  ($('modelSelect') as HTMLSelectElement).addEventListener('change', (e) => void setActiveModel((e.target as HTMLSelectElement).value));
   $('menuBtn').addEventListener('click', (e) => {
     e.stopPropagation();
     $('menu').classList.toggle('hidden');
@@ -658,7 +717,9 @@ async function init() {
   $('confirmNo').addEventListener('click', () => void answerConfirm(false));
 
   api.onRunState((s) => {
+    if (s.status === 'running' && run.status === 'idle') lastAction = '';
     run = s;
+    applyTheme();
     renderHeader();
     renderComposer();
   });
@@ -666,13 +727,26 @@ async function init() {
   api.onConfirm((r) => showConfirm(r));
   api.onConfirmCancel((id) => { if (pendingConfirm?.id === id) showConfirm(null); });
   api.onExpanded((v) => {
-    document.body.classList.toggle('collapsed', !v);
-    if (v) ta.focus();
+    isOpen = v;
+    window.clearTimeout(shrinkTimer);
+    if (v) {
+      // La ventana ya ha crecido: en el siguiente frame el notch se despliega con la animación.
+      requestAnimationFrame(() => document.body.classList.add('open'));
+      ta.focus();
+    } else {
+      $('menu').classList.add('hidden');
+      document.body.classList.remove('open');
+      // Cuando termina la animación de recoger, la ventana vuelve al tamaño del notch.
+      shrinkTimer = window.setTimeout(() => { if (!isOpen) void api.shrink(); }, 380);
+    }
   });
-  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTheme);
+  // Clic fuera: se recoge solo si no hay nada a medias (chat vacío, sin confirmación, sin paneles abiertos).
+  api.onBlur(() => {
+    if (!isOpen || run.status !== 'idle' || pendingConfirm || view !== 'chat' || ta.value.trim()) return;
+    void api.setExpanded(false);
+  });
 
   renderAll();
-  ta.focus();
 }
 
 void init();

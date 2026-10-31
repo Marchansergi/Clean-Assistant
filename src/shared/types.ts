@@ -42,7 +42,8 @@ export interface Settings {
   typingDelayMs: number;
   claudeCliPath: string;
   codexCliPath: string;
-  theme: 'auto' | 'dark' | 'light';
+  /** Abrir la app al iniciar sesión en Windows. */
+  openAtLogin: boolean;
 }
 
 /** Lo que ve la vista: los ajustes más si hay claves guardadas (nunca las claves). */

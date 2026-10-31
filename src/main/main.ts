@@ -8,14 +8,16 @@ import { WinInput } from './input/win-input';
 import { Runner } from './agents/runner';
 import { getPublicSettings, getSettings, saveSettings, setSecret } from './settings';
 
-const COLLAPSED = { width: 104, height: 104 };
-const EXPANDED = { width: 408, height: 660 };
-const MARGIN = 10;
+// Notch arriba en el centro: pequeño en reposo, más ancho mientras un agente trabaja
+// y desplegado hacia abajo al abrirlo.
+const NOTCH_IDLE = { width: 248, height: 40 };
+const NOTCH_BUSY = { width: 420, height: 40 };
+const EXPANDED = { width: 500, height: 660 };
 
 let widget: BrowserWindow | null = null;
 let overlay: BrowserWindow | null = null;
 let tray: Tray | null = null;
-let expanded = true;
+let expanded = false;
 let activeAgentId: string | null = null;
 let registeredShortcut: string | null = null;
 
@@ -35,19 +37,34 @@ function sendOverlay(msg: OverlayMsg) {
 
 function widgetBounds(isExpanded: boolean) {
   const wa = screen.getPrimaryDisplay().workArea;
-  const size = isExpanded ? EXPANDED : COLLAPSED;
+  const size = isExpanded ? EXPANDED : runner.busy ? NOTCH_BUSY : NOTCH_IDLE;
   return {
-    x: wa.x + wa.width - size.width - MARGIN,
-    y: wa.y + wa.height - size.height - MARGIN,
+    x: Math.round(wa.x + (wa.width - size.width) / 2),
+    y: wa.y,
     width: size.width,
     height: size.height,
   };
 }
 
+/**
+ * Al abrir, la ventana crece primero y la vista anima el notch hacia abajo.
+ * Al cerrar, la vista anima y después pide encoger la ventana ('widget:shrink').
+ */
 function setExpanded(v: boolean) {
   expanded = v;
-  widget?.setBounds(widgetBounds(v));
+  if (v) {
+    widget?.setBounds(widgetBounds(true));
+    widget?.focus();
+  }
   sendWidget('widget:expanded', v);
+}
+
+function refreshNotchSize() {
+  if (!expanded) widget?.setBounds(widgetBounds(false));
+}
+
+function applyLoginItem(s: Settings) {
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: s.openAtLogin });
 }
 
 function applyCaptureProtection(s: Settings) {
@@ -59,7 +76,7 @@ function applyCaptureProtection(s: Settings) {
 
 function createWidget() {
   widget = new BrowserWindow({
-    ...widgetBounds(true),
+    ...widgetBounds(false),
     frame: false,
     transparent: true,
     resizable: false,
@@ -80,7 +97,11 @@ function createWidget() {
   });
   widget.setAlwaysOnTop(true, 'floating');
   widget.loadFile(renderer('widget', 'index.html'));
-  widget.once('ready-to-show', () => widget?.show());
+  widget.once('ready-to-show', () => widget?.showInactive());
+  // Como la Dynamic Island: si haces clic fuera, la vista decide si se recoge.
+  widget.on('blur', () => {
+    if (!runner.busy) sendWidget('widget:blur', null);
+  });
   widget.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url);
     return { action: 'deny' };
@@ -181,6 +202,7 @@ const runner = new Runner({
   state: (s: RunStateMsg) => {
     if (s.status === 'stopping') rejectPendingConfirms();
     sendWidget('run:state', s);
+    refreshNotchSize();
   },
   confirm,
   onRunChange: (running, agentId) => {
@@ -235,6 +257,7 @@ function registerIpc() {
   ipcMain.handle('settings:save', (_e, patch: Partial<Settings>) => {
     const s = saveSettings(patch);
     applyCaptureProtection(s);
+    applyLoginItem(s);
     return getPublicSettings();
   });
   ipcMain.handle('secret:set', (_e, name: SecretName, value: string) => {
@@ -251,6 +274,7 @@ function registerIpc() {
   ipcMain.handle('task:stop', () => runner.stop());
   ipcMain.handle('history:clear', (_e, agentId: string) => runner.clearHistory(agentId));
   ipcMain.handle('widget:expand', (_e, v: boolean) => setExpanded(!!v));
+  ipcMain.handle('widget:shrink', () => refreshNotchSize());
   ipcMain.handle('confirm:respond', (_e, id: string, ok: boolean) => {
     const resolve = pendingConfirms.get(id);
     pendingConfirms.delete(id);
@@ -275,6 +299,7 @@ if (!app.requestSingleInstanceLock()) {
     createOverlay();
     createTray();
     applyCaptureProtection(getSettings());
+    applyLoginItem(getSettings());
     input.warmUp();
     screen.on('display-metrics-changed', () => {
       widget?.setBounds(widgetBounds(expanded));
