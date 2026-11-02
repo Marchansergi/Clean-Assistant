@@ -243,3 +243,22 @@ input[type=color] { width: 40px; height: 34px; border: 0; padding: 0; background
 .editor-preview .ep-avatar { width: 84px; height: 84px; }
 .editor-preview .ep-avatar .mascot { width: 100%; height: 100%; }
 .row-buttons { display: flex; gap: 8px; justify-content: space-between; margin-top: 6px; }
+
+/* ---------- Voz ---------- */
+.mic { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--surface-3); color: var(--muted); display: grid; place-items: center; transition: background .15s, color .15s, transform .15s; flex: none; }
+.mic:hover { color: var(--text); transform: scale(1.06); }
+body.listening .mic { background: #ff453a; color: #fff; animation: micpulse 1.2s ease-in-out infinite; }
+body.transcribing .mic { background: var(--surface-3); color: var(--accent); animation: dim 1s steps(3) infinite; }
+@keyframes micpulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 69, 58, .5); } 50% { box-shadow: 0 0 0 7px rgba(255, 69, 58, 0); } }
+/* La barra del notch enseña el nivel del micrófono o de la voz del agente */
+body.listening .bar-wave, body.talking .bar-wave { display: flex; }
+body.listening .bar-wave i, body.talking .bar-wave i { animation: none; height: calc(4px + var(--lvl, 0) * var(--k, 1) * 12px); transition: height .06s linear; }
+body.listening .bar-wave i { background: #ff453a; }
+.bar-wave i:nth-child(1) { --k: .6; } .bar-wave i:nth-child(2) { --k: 1; } .bar-wave i:nth-child(3) { --k: .85; } .bar-wave i:nth-child(4) { --k: .5; }
+body.listening .notch { box-shadow: 0 0 0 1px rgba(255, 69, 58, .55), 0 10px 30px rgba(0, 0, 0, .45); }
+/* Boca de la mascota al hablar */
+.mascot .mouth { transform-box: fill-box; transform-origin: center top; transition: transform .05s linear; }
+.progress { height: 4px; border-radius: 4px; background: var(--surface-3); overflow: hidden; margin-top: 6px; }
+.progress > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.install-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.install-row .hint { flex: 1; }

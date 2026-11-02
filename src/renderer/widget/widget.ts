@@ -3,6 +3,8 @@ import { CLAUDE_MODELS, DEFAULT_MODELS, OPENAI_MODEL_SUGGESTIONS, PROVIDER_LABEL
 import type { AgentEvent, AgentProfile, ConfirmRequest, ProviderId, PublicSettings, RunStateMsg, Settings } from '../../shared/types';
 import { avatarHtml } from '../common/mascots';
 import { playNotchSound } from './sounds';
+import { Listener, Speaker, encodeWav, isStopCommand } from './voice';
+import { PIPER_VOICES, STT_MODELS, type VoiceComponent, type VoiceProgress, type VoiceStatus } from '../../shared/voice';
 
 declare global {
   interface Window { api: WidgetApi }
@@ -39,7 +41,7 @@ function avatar(agent: AgentProfile, cls: string): HTMLElement {
 // ---------- estado ----------
 
 type ChatItem =
-  | { kind: 'agent'; text: string; done?: boolean; el?: HTMLElement }
+  | { kind: 'agent'; text: string; done?: boolean; spoken?: boolean; el?: HTMLElement }
   | { kind: 'user' | 'info' | 'error'; text: string; el?: HTMLElement }
   | { kind: 'thinking'; text: string; live: boolean; el?: HTMLElement }
   | { kind: 'action'; text: string; icon: string; el?: HTMLElement };
@@ -53,6 +55,22 @@ let lastAction = '';
 let doneFlash = '';
 let doneTimer: number | undefined;
 let isOpen = false;
+let voice: VoiceStatus | null = null;
+let voiceMode: 'idle' | 'listening' | 'transcribing' = 'idle';
+let voiceNote = '';
+let voiceNoteTimer: number | undefined;
+const progress = new Map<VoiceComponent, VoiceProgress>();
+const listener = new Listener();
+const speaker = new Speaker({
+  onLevel: (lvl) => {
+    document.body.style.setProperty('--lvl', String(lvl));
+    // La boca se abre con el volumen de la voz.
+    for (const m of document.querySelectorAll<SVGElement>('.hero-avatar .mouth, .bar-avatar .mouth, .empty-avatar .mouth')) {
+      m.style.transform = `scaleY(${1 + lvl * 1.7})`;
+    }
+  },
+  onTalking: (on) => document.body.classList.toggle('talking', on),
+});
 let shrinkTimer: number | undefined;
 const chats = new Map<string, ChatItem[]>();
 
@@ -103,7 +121,10 @@ function renderHeader() {
   const barAgent = runningAgent ?? a;
   $('barAvatar').innerHTML = avatarHtml(barAgent);
   $('barName').textContent = barAgent.name;
-  $('barStatus').textContent = run.status === 'stopping'
+  $('barStatus').textContent = voiceMode === 'listening' ? 'Te escucho…'
+    : voiceMode === 'transcribing' ? 'Entendiendo…'
+    : voiceNote ? voiceNote
+    : run.status === 'stopping'
     ? 'Deteniendo…'
     : busy ? (lastAction || 'Pensando…') : doneFlash || modelLabel(a.model || DEFAULT_MODELS[a.provider]);
   document.documentElement.style.setProperty('--collapsed-w', busy ? '420px' : '248px');
@@ -122,6 +143,176 @@ function renderModelSelect() {
   if (!options.some((o) => o.value === current)) options.push({ value: current, label: modelLabel(current) });
   sel.replaceChildren(...options.map((o) => h('option', { value: o.value, selected: o.value === current }, o.label)));
   sel.disabled = run.status !== 'idle';
+}
+
+// ---------- voz ----------
+
+/** Lee en voz alta una burbuja del agente (una sola vez). */
+function say(agentId: string, item: Extract<ChatItem, { kind: 'agent' }>) {
+  if (item.spoken || !settings.voiceReplies || !item.text.trim()) return;
+  item.spoken = true;
+  const text = item.text.trim();
+  speaker.say(text, () => api.speak(agentId, text), settings.ttsVolume, settings.ttsRate);
+}
+
+function noteVoice(text: string) {
+  voiceNote = text;
+  window.clearTimeout(voiceNoteTimer);
+  voiceNoteTimer = window.setTimeout(() => {
+    voiceNote = '';
+    renderHeader();
+  }, 4500);
+  renderHeader();
+}
+
+function setVoiceMode(mode: typeof voiceMode) {
+  voiceMode = mode;
+  document.body.classList.toggle('listening', mode === 'listening');
+  document.body.classList.toggle('transcribing', mode === 'transcribing');
+  renderHeader();
+}
+
+/** Pulsar el micro o el atajo: empieza a escuchar, o termina si ya estaba escuchando. */
+async function talk() {
+  if (voiceMode === 'listening') {
+    listener.stop();
+    return;
+  }
+  if (voiceMode === 'transcribing') return;
+  speaker.stop();
+  if (!voice?.whisper || !voice.sttModels[settings.sttModel]) {
+    if (!isOpen) void api.setExpanded(true);
+    setView('settings');
+    [...document.querySelectorAll('#settingsBody .group')].find((g) => g.textContent?.includes('Hablarles'))?.scrollIntoView({ behavior: 'smooth' });
+    noteVoice('Instala el reconocimiento de voz en Ajustes');
+    return;
+  }
+  setVoiceMode('listening');
+  if (settings.sounds) playNotchSound('open', settings.soundVolume * 0.6);
+  let samples: Float32Array | null;
+  try {
+    samples = await listener.listen({
+      deviceId: settings.micDeviceId || undefined,
+      onLevel: (lvl) => document.body.style.setProperty('--lvl', String(lvl)),
+    });
+  } catch (e) {
+    setVoiceMode('idle');
+    noteVoice('No puedo usar el micrófono');
+    onAgentEvent(activeAgent().id, { type: 'error', text: errText(e) });
+    return;
+  }
+  if (!samples) {
+    setVoiceMode('idle');
+    noteVoice('No te he oído');
+    return;
+  }
+  setVoiceMode('transcribing');
+  let text = '';
+  try {
+    text = await api.transcribe(encodeWav(samples));
+  } catch (e) {
+    setVoiceMode('idle');
+    onAgentEvent(activeAgent().id, { type: 'error', text: errText(e) });
+    return;
+  }
+  setVoiceMode('idle');
+  await handleVoiceText(text);
+}
+
+async function handleVoiceText(text: string) {
+  if (!text) {
+    noteVoice('No te he entendido');
+    return;
+  }
+  if (run.status !== 'idle') {
+    if (isStopCommand(text)) {
+      noteVoice('Vale, paro');
+      await api.stopTask();
+    } else {
+      noteVoice('Estoy trabajando · di «para» para detenerme');
+    }
+    return;
+  }
+  const ta = $('prompt') as HTMLTextAreaElement;
+  ta.value = text;
+  autoGrow();
+  if (settings.voiceAutoSend) {
+    await send();
+  } else {
+    if (!isOpen) await api.setExpanded(true);
+    setView('chat');
+    ta.focus();
+  }
+}
+
+async function refreshVoice() {
+  voice = await api.voiceStatus();
+}
+
+function isInstalled(c: VoiceComponent): boolean {
+  if (!voice) return false;
+  if (c === 'piper') return voice.piper;
+  if (c === 'whisper') return voice.whisper;
+  if (c.startsWith('voice:')) return !!voice.voices[c.slice(6)]?.installed;
+  if (c.startsWith('stt:')) return !!voice.sttModels[c.slice(4)];
+  return false;
+}
+
+const mb = (n: number) => `${Math.round(n / 1048576)} MB`;
+
+function progressText(p: VoiceProgress): string {
+  switch (p.phase) {
+    case 'download': return p.total ? `Descargando ${mb(p.received ?? 0)} de ${mb(p.total)} (${Math.round(((p.received ?? 0) / p.total) * 100)} %)` : `Descargando ${mb(p.received ?? 0)}…`;
+    case 'verify': return 'Comprobando el archivo…';
+    case 'extract': return 'Descomprimiendo…';
+    case 'done': return '✓ Instalado';
+    case 'error': return `✗ ${p.message ?? 'Error'}`;
+  }
+}
+
+/** Botón «Descargar» con barra de progreso, o «✓ Instalado». */
+function installControl(components: VoiceComponent[], label: string, sizeMb: number): HTMLElement {
+  const done = components.every(isInstalled);
+  const status = h('span', { class: `hint ${done ? '' : ''}` }, done ? '✓ Instalado' : `${label} (~${sizeMb} MB)`);
+  const bar = h('i');
+  const wrap = h('div', { class: 'field', 'data-components': components.join(' ') },
+    h('div', { class: 'install-row' }, status,
+      done ? null : h('button', { class: 'btn primary small', onclick: async (e: Event) => {
+        (e.target as HTMLButtonElement).disabled = true;
+        try {
+          for (const c of components) if (!isInstalled(c)) await api.installVoice(c);
+        } catch (err) {
+          status.textContent = `✗ ${errText(err)}`;
+          (e.target as HTMLButtonElement).disabled = false;
+        }
+      } }, 'Descargar')),
+    done ? null : h('div', { class: 'progress' }, bar));
+  return wrap;
+}
+
+function updateProgress(p: VoiceProgress) {
+  for (const el of document.querySelectorAll<HTMLElement>('[data-components]')) {
+    if (!el.dataset.components!.split(' ').includes(p.component)) continue;
+    const status = el.querySelector('.install-row .hint');
+    if (status) status.textContent = progressText(p);
+    const bar = el.querySelector<HTMLElement>('.progress > i');
+    if (bar && p.phase === 'download' && p.total) bar.style.width = `${((p.received ?? 0) / p.total) * 100}%`;
+    if (bar && (p.phase === 'verify' || p.phase === 'extract' || p.phase === 'done')) bar.style.width = '100%';
+  }
+}
+
+function renderSettingsKeepScroll() {
+  const body = $('settingsBody');
+  const top = body.scrollTop;
+  renderSettings();
+  body.scrollTop = top;
+}
+
+function renderAgentsKeepScroll() {
+  const body = $('agentsBody');
+  const top = body.scrollTop;
+  renderAgents();
+  body.scrollTop = top;
 }
 
 /** Mensaje breve en el notch recogido cuando un agente termina. */
@@ -270,7 +461,10 @@ function onAgentEvent(agentId: string, ev: AgentEvent) {
       break;
     case 'action':
       closeLive(items);
-      if (last?.kind === 'agent') last.done = true;
+      if (last?.kind === 'agent') {
+        last.done = true;
+        say(agentId, last);
+      }
       push({ kind: 'action', text: ev.label, icon: ev.icon });
       lastAction = ev.label;
       renderHeader();
@@ -291,6 +485,10 @@ function onAgentEvent(agentId: string, ev: AgentEvent) {
         if (ev.text.trim()) push({ kind: 'agent', text: ev.text, done: true });
       }
       flashDone(ev.text.trim() ? `✓ ${ev.text.trim().split('\n')[0]}` : '✓ Hecho');
+      {
+        const lastAgent = items.slice().reverse().find((i): i is Extract<ChatItem, { kind: 'agent' }> => i.kind === 'agent');
+        if (lastAgent) say(agentId, lastAgent);
+      }
       const fin = items.slice().reverse().find((i): i is Extract<ChatItem, { kind: 'agent' }> => i.kind === 'agent');
       if (fin) {
         fin.done = true;
@@ -499,6 +697,43 @@ function agentEditor(a: AgentProfile): HTMLElement {
     h('option', { value: e, selected: e === draft.effort }, ({ low: 'Rápido', medium: 'Equilibrado', high: 'Cuidadoso', xhigh: 'Muy cuidadoso', max: 'Máximo' })[e])));
   effort.addEventListener('change', () => { draft.effort = effort.value as AgentProfile['effort']; });
 
+  // Voz de Piper del agente
+  const voiceBox = h('div');
+  const renderVoicePicker = () => {
+    voiceBox.replaceChildren();
+    const sel = h('select', { class: 'input' }, ...PIPER_VOICES.map((v) =>
+      h('option', { value: v.id, selected: v.id === (draft.voice ?? PIPER_VOICES[0].id) }, `${v.label}${isInstalled(`voice:${v.id}`) ? '' : ' · sin descargar'}`)));
+    sel.addEventListener('change', () => {
+      draft.voice = sel.value;
+      draft.voiceSpeaker = undefined;
+      renderVoicePicker();
+    });
+    const vid = draft.voice ?? PIPER_VOICES[0].id;
+    const v = PIPER_VOICES.find((x) => x.id === vid) ?? PIPER_VOICES[0];
+    const speakers = voice?.voices[v.id]?.speakers ?? [];
+    let speakerSel: HTMLElement | null = null;
+    if (speakers.length > 1) {
+      if (!draft.voiceSpeaker || !speakers.includes(draft.voiceSpeaker)) draft.voiceSpeaker = speakers[0];
+      const ss = h('select', { class: 'input' }, ...speakers.map((sp) =>
+        h('option', { value: sp, selected: sp === draft.voiceSpeaker }, sp === 'F' ? 'Voz de mujer' : sp === 'M' ? 'Voz de hombre' : sp)));
+      ss.addEventListener('change', () => { draft.voiceSpeaker = ss.value; });
+      speakerSel = ss;
+    }
+    const test = h('button', { class: 'btn ghost small', onclick: () => {
+      speaker.stop();
+      const line = `¡Hola! Soy ${draft.name || 'tu agente'}. ¿Qué hacemos hoy?`;
+      speaker.say(line, () => api.speak(draft.id, line, { voice: v.id, speaker: draft.voiceSpeaker }), settings.ttsVolume, settings.ttsRate);
+    } }, 'Probar voz');
+    const parts: (HTMLElement | null)[] = [
+      h('div', { class: 'inline' }, sel, test),
+      speakerSel ? h('div', { style: 'margin-top:6px' }, speakerSel) : null,
+      isInstalled(`voice:${v.id}`) ? null : installControl([`voice:${v.id}`], 'Esta voz no está descargada', v.sizeMb),
+      !voice?.piper ? h('div', { class: 'hint', style: 'margin-top:4px' }, 'Hasta que instales Piper (Ajustes → Voz de los agentes) se usará la voz de Windows.') : null,
+    ];
+    voiceBox.append(...parts.filter((x): x is HTMLElement => x !== null));
+  };
+  renderVoicePicker();
+
   const extra = h('textarea', { class: 'input', placeholder: 'Ej.: "Usa siempre Firefox. Habla con emojis."' });
   extra.value = draft.extraInstructions;
   extra.addEventListener('input', () => { draft.extraInstructions = extra.value; });
@@ -539,6 +774,7 @@ function agentEditor(a: AgentProfile): HTMLElement {
       h('div', { class: 'field' }, h('label', {}, 'Esfuerzo'), effort,
         h('div', { class: 'hint' }, 'Más esfuerzo = más fiable pero más lento y caro.')),
       h('div', { class: 'field' }, h('label', {}, 'Personalidad e instrucciones'), extra),
+      h('div', { class: 'field' }, h('label', {}, 'Voz'), voiceBox),
     ),
     h('div', { class: 'row-buttons' },
       h('button', { class: 'btn danger', onclick: () => void remove() }, 'Borrar'),
@@ -614,6 +850,61 @@ function cliField(label: string, key: 'claudeCliPath' | 'codexCliPath', provider
     h('div', { class: 'inline' }, input, check));
 }
 
+function voiceGroup(): HTMLElement {
+  const s = settings;
+  const engine = h('select', { class: 'input' },
+    h('option', { value: 'piper', selected: s.ttsEngine === 'piper' }, 'Piper · voz natural, en tu PC'),
+    h('option', { value: 'system', selected: s.ttsEngine === 'system' }, 'Voz de Windows · sin descargas'));
+  engine.addEventListener('change', () => saveLater({ ttsEngine: engine.value as Settings['ttsEngine'] }));
+  const rateVal = h('span', { class: 'hint' }, `${s.ttsRate.toFixed(2)}×`);
+  const rate = h('input', { type: 'range', min: 0.6, max: 1.6, step: 0.05, value: s.ttsRate });
+  rate.addEventListener('input', () => {
+    rateVal.textContent = `${Number(rate.value).toFixed(2)}×`;
+    saveLater({ ttsRate: Number(rate.value) });
+  });
+  return h('div', { class: 'group' },
+    h('h3', {}, 'Voz de los agentes'),
+    toggle('Que te hablen', 'Leen en voz alta lo que te dicen en el chat.', 'voiceReplies'),
+    h('div', { class: 'field' }, h('label', {}, 'Motor de voz'), engine),
+    s.ttsEngine === 'piper' ? installControl(['piper'], 'Piper no está instalado', 22) : null,
+    s.ttsEngine === 'piper' ? h('div', { class: 'hint', style: 'margin:-4px 0 10px' }, 'Cada agente elige su voz en «Mis agentes». Las voces se descargan una vez y funcionan sin internet.') : null,
+    range('Volumen de la voz', 'ttsVolume', 0, 100, 5, '%'),
+    h('div', { class: 'field' }, h('div', { class: 'inline' }, h('label', {}, 'Velocidad'), rateVal), rate));
+}
+
+function micGroup(): HTMLElement {
+  const s = settings;
+  const model = STT_MODELS.find((m) => m.id === s.sttModel) ?? STT_MODELS[0];
+  const modelSel = h('select', { class: 'input' }, ...STT_MODELS.map((m) =>
+    h('option', { value: m.id, selected: m.id === model.id }, `${m.label} · ~${m.sizeMb} MB${isInstalled(`stt:${m.id}`) ? '' : ' · sin descargar'}`)));
+  modelSel.addEventListener('change', async () => {
+    settings = await api.saveSettings({ sttModel: modelSel.value });
+    renderSettingsKeepScroll();
+  });
+  const lang = h('select', { class: 'input' },
+    h('option', { value: 'es', selected: s.sttLanguage === 'es' }, 'Español'),
+    h('option', { value: 'auto', selected: s.sttLanguage === 'auto' }, 'Detectar idioma'));
+  lang.addEventListener('change', () => saveLater({ sttLanguage: lang.value }));
+  const mic = h('select', { class: 'input' }, h('option', { value: '' }, 'Micrófono predeterminado de Windows'));
+  void navigator.mediaDevices.enumerateDevices().then((devs) => {
+    for (const d of devs.filter((x) => x.kind === 'audioinput' && x.deviceId !== 'default' && x.deviceId !== 'communications')) {
+      mic.append(h('option', { value: d.deviceId, selected: d.deviceId === s.micDeviceId }, d.label || 'Micrófono'));
+    }
+  });
+  mic.addEventListener('change', () => saveLater({ micDeviceId: mic.value }));
+  const shortcut = h('input', { type: 'text', value: s.talkShortcut });
+  shortcut.addEventListener('change', () => saveLater({ talkShortcut: shortcut.value.trim() }));
+  return h('div', { class: 'group' },
+    h('h3', {}, 'Hablarles'),
+    h('div', { class: 'hint', style: 'margin-bottom:10px' }, 'Pulsa el micro o el atajo, habla, y cuando te calles lo entienden y se ponen a ello. Todo se procesa en tu PC con whisper.cpp: tu voz no sale de tu ordenador.'),
+    installControl(['whisper', `stt:${model.id}`], 'El reconocimiento de voz no está instalado', 8 + model.sizeMb),
+    h('div', { class: 'field' }, h('label', {}, 'Precisión'), modelSel),
+    h('div', { class: 'field' }, h('label', {}, 'Idioma en el que hablas'), lang),
+    h('div', { class: 'field' }, h('label', {}, 'Micrófono'), mic),
+    h('div', { class: 'field' }, h('label', {}, 'Atajo para hablar'), shortcut, h('div', { class: 'hint' }, 'Funciona aunque el notch esté recogido. Mientras trabajan, di «para» para detenerlos.')),
+    toggle('Enviar al terminar de hablar', 'Si lo desactivas, el texto se queda escrito para que lo revises.', 'voiceAutoSend'));
+}
+
 function renderSettings() {
   const body = $('settingsBody');
   const s = settings;
@@ -676,6 +967,8 @@ function renderSettings() {
       h('div', { class: 'field' }, h('label', {}, 'Confirmaciones'), confirmSel),
       h('div', { class: 'field' }, h('label', {}, 'Máximo de pasos por tarea'), maxSteps),
       h('div', { class: 'field' }, h('label', {}, 'Atajo para detener'), shortcut, h('div', { class: 'hint' }, 'Formato de Electron, p. ej. Control+Alt+Q. Funciona aunque la app no tenga el foco.'))),
+    voiceGroup(),
+    micGroup(),
     h('div', { class: 'group' },
       h('h3', {}, 'Pantallas'),
       toggle('Usar todas las pantallas', 'El agente puede ver y trabajar en cualquiera de tus monitores, cambiando de uno a otro según la tarea.', 'multiScreen'),
@@ -703,10 +996,12 @@ function renderSettings() {
 
 async function init() {
   settings = await api.getSettings();
+  await refreshVoice();
 
   $('bar').addEventListener('click', () => void api.setExpanded(true));
   $('barStop').addEventListener('click', (e) => {
     e.stopPropagation();
+    speaker.stop();
     void api.stopTask();
   });
   $('minBtn').addEventListener('click', () => void api.setExpanded(false));
@@ -740,7 +1035,24 @@ async function init() {
     }
   });
   $('sendBtn').addEventListener('click', () => void send());
-  $('stopBtn').addEventListener('click', () => void api.stopTask());
+  $('stopBtn').addEventListener('click', () => {
+    speaker.stop();
+    void api.stopTask();
+  });
+  $('micBtn').addEventListener('click', () => void talk());
+  api.onTalk(() => void talk());
+  api.onVoiceProgress((p) => {
+    progress.set(p.component, p);
+    updateProgress(p);
+    if (p.phase === 'done' || p.phase === 'error') {
+      void refreshVoice().then(() => {
+        if (view === 'settings') renderSettingsKeepScroll();
+        if (view === 'agents') renderAgentsKeepScroll();
+      });
+    }
+  });
+  // Clic en la mascota mientras habla: se calla.
+  $('heroAvatar').addEventListener('click', () => speaker.stop());
   $('confirmYes').addEventListener('click', () => void answerConfirm(true));
   $('confirmNo').addEventListener('click', () => void answerConfirm(false));
 

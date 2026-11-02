@@ -18,6 +18,10 @@ export interface AgentProfile {
   avatarDataUrl?: string;
   effort: Effort;
   extraInstructions: string;
+  /** Voz de Piper (id del catálogo). Vacío = la primera instalada. */
+  voice?: string;
+  /** Hablante dentro de la voz, si tiene varios (p. ej. "F" o "M"). */
+  voiceSpeaker?: string;
 }
 
 export interface Settings {
@@ -50,6 +54,23 @@ export interface Settings {
   sounds: boolean;
   /** Volumen de los sonidos (0-100). */
   soundVolume: number;
+  /** Los agentes leen en voz alta lo que dicen. */
+  voiceReplies: boolean;
+  /** Motor de voz: Piper (natural, local) o la voz de Windows (sin descargas). */
+  ttsEngine: 'piper' | 'system';
+  ttsVolume: number;
+  /** Velocidad de habla (1 = normal). */
+  ttsRate: number;
+  /** Modelo de reconocimiento de voz (id de STT_MODELS). */
+  sttModel: string;
+  /** Idioma en el que hablas ('es' o 'auto'). */
+  sttLanguage: string;
+  /** Atajo global para hablar con el agente. */
+  talkShortcut: string;
+  /** Lanzar la tarea en cuanto terminas de hablar (si no, se queda escrita para revisarla). */
+  voiceAutoSend: boolean;
+  /** Micrófono elegido (vacío = el predeterminado de Windows). */
+  micDeviceId: string;
 }
 
 /** Lo que ve la vista: los ajustes más si hay claves guardadas (nunca las claves). */

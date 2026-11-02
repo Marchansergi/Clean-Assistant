@@ -16,6 +16,7 @@ await Promise.all([
   build({ ...common, platform: 'node', format: 'cjs', entryPoints: [path.join(root, 'src/mcp-bridge/index.ts')], outfile: path.join(out, 'mcp-bridge/index.js') }),
   build({ ...common, platform: 'browser', format: 'iife', entryPoints: [path.join(root, 'src/renderer/widget/widget.ts')], outfile: path.join(out, 'renderer/widget/widget.js') }),
   build({ ...common, platform: 'browser', format: 'iife', entryPoints: [path.join(root, 'src/renderer/overlay/overlay.ts')], outfile: path.join(out, 'renderer/overlay/overlay.js') }),
+  build({ ...common, platform: 'browser', format: 'iife', entryPoints: [path.join(root, 'src/renderer/widget/recorder-worklet.ts')], outfile: path.join(out, 'renderer/widget/recorder-worklet.js') }),
 ]);
 
 for (const view of ['widget', 'overlay']) {

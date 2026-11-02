@@ -1,10 +1,12 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import crossSpawn from 'cross-spawn';
-import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray, type Display } from 'electron';
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, screen, session, shell, Tray, type Display } from 'electron';
 import type { AgentEvent, AgentEventMsg, ConfirmRequest, OverlayMsg, ProviderId, RunStateMsg, SecretName, Settings } from '../shared/types';
 import { Desktop } from './desktop';
 import { describeDisplays } from './screen-capture';
+import { installComponent, synthesize, transcribe, voiceStatus } from './voice/manager';
+import type { VoiceComponent } from '../shared/voice';
 import { WinInput } from './input/win-input';
 import { Runner } from './agents/runner';
 import { getPublicSettings, getSettings, saveSettings, setSecret } from './settings';
@@ -22,6 +24,7 @@ let tray: Tray | null = null;
 let expanded = false;
 let activeAgentId: string | null = null;
 let registeredShortcut: string | null = null;
+let registeredTalkShortcut: string | null = null;
 
 const input = new WinInput();
 const pendingConfirms = new Map<string, (ok: boolean) => void>();
@@ -205,6 +208,19 @@ function registerStopShortcut() {
   }
 }
 
+/** Atajo global para hablar con el agente: siempre activo, aunque la app no tenga el foco. */
+function registerTalkShortcut() {
+  if (registeredTalkShortcut) globalShortcut.unregister(registeredTalkShortcut);
+  registeredTalkShortcut = null;
+  const accel = getSettings().talkShortcut.trim();
+  if (!accel) return;
+  try {
+    if (globalShortcut.register(accel, () => sendWidget('voice:talk', null))) registeredTalkShortcut = accel;
+  } catch {
+    /* atajo no válido: se ignora */
+  }
+}
+
 function unregisterStopShortcut() {
   if (registeredShortcut) globalShortcut.unregister(registeredShortcut);
   registeredShortcut = null;
@@ -305,6 +321,7 @@ function registerIpc() {
     const s = saveSettings(patch);
     applyCaptureProtection(s);
     applyLoginItem(s);
+    if ('talkShortcut' in patch) registerTalkShortcut();
     return getPublicSettings();
   });
   ipcMain.handle('secret:set', (_e, name: SecretName, value: string) => {
@@ -330,6 +347,25 @@ function registerIpc() {
   ipcMain.handle('cli:check', (_e, provider: ProviderId) => checkCli(provider));
   ipcMain.handle('app:quit', () => app.quit());
   ipcMain.handle('screens:list', () => describeDisplays());
+  ipcMain.handle('voice:status', () => voiceStatus());
+  ipcMain.handle('voice:install', async (_e, component: VoiceComponent) => {
+    await installComponent(component, (p) => sendWidget('voice:progress', p));
+    return voiceStatus();
+  });
+  ipcMain.handle('tts:speak', async (_e, agentId: string, text: string, override?: { voice?: string; speaker?: string }) => {
+    const s = getSettings();
+    if (s.ttsEngine !== 'piper') return null;
+    const agent = s.agents.find((a) => a.id === agentId);
+    const voiceId = override ? override.voice : agent?.voice;
+    const speakerName = override ? override.speaker : agent?.voiceSpeaker;
+    const wav = await synthesize(String(text ?? ''), voiceId, speakerName, s.ttsRate);
+    return wav ? new Uint8Array(wav) : null;
+  });
+  ipcMain.handle('stt:transcribe', async (_e, wav: Uint8Array) => {
+    const s = getSettings();
+    if (!(wav instanceof Uint8Array) || wav.byteLength > 20_000_000) throw new Error('Audio no válido.');
+    return transcribe(Buffer.from(wav), s.sttModel, s.sttLanguage, s.agents.map((a) => a.name));
+  });
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -344,8 +380,12 @@ if (!app.requestSingleInstanceLock()) {
     app.setAppUserModelId('com.cleanassistant.app');
     registerIpc();
     createWidget();
+    // Micrófono solo para el chat de la app; ningún otro permiso.
+    session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'media' && wc === widget?.webContents));
+    session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'media' && wc === widget?.webContents);
     createOverlays();
     createTray();
+    registerTalkShortcut();
     applyLoginItem(getSettings());
     input.warmUp();
     screen.on('display-added', onDisplaysChanged);

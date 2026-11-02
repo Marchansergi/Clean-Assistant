@@ -41,6 +41,8 @@ export const DEFAULT_AGENTS: AgentProfile[] = [
     mascot: 'claude',
     effort: 'medium',
     extraInstructions: '',
+    voice: 'es_ES-sharvard-medium',
+    voiceSpeaker: 'F',
   },
   {
     id: 'chati',
@@ -51,6 +53,7 @@ export const DEFAULT_AGENTS: AgentProfile[] = [
     mascot: 'chatgpt',
     effort: 'medium',
     extraInstructions: '',
+    voice: 'es_ES-davefx-medium',
   },
 ];
 
@@ -74,4 +77,13 @@ export const DEFAULT_SETTINGS: Settings = {
   multiScreen: true,
   sounds: true,
   soundVolume: 60,
+  voiceReplies: true,
+  ttsEngine: 'piper',
+  ttsVolume: 85,
+  ttsRate: 1,
+  sttModel: 'small-q5_1',
+  sttLanguage: 'es',
+  talkShortcut: 'Control+Alt+Space',
+  voiceAutoSend: true,
+  micDeviceId: '',
 };

@@ -20,6 +20,7 @@ No necesita APIs de desarrollador de Spotify ni extensiones del navegador: el ag
 ## Qué hace
 
 - **Notch arriba en el centro**, negro y opaco: recogido muestra al agente y su modelo; mientras trabaja se ensancha y enseña en directo lo que está haciendo, con un botón para pararlo. Haz clic y se despliega hacia abajo con el chat, el selector de agentes, el menú y los ajustes. Si haces clic fuera, se recoge solo.
+- **Háblales y te hablan**: pulsa el micro (o **Ctrl+Alt+Espacio** desde cualquier sitio), di lo que quieres y, cuando te callas, lo entienden y se ponen a ello. Leen en voz alta lo que te dicen y la boca de la mascota se mueve al hablar. Mientras trabajan, di «para» para detenerlos.
 - **Sonido** suave al abrir y cerrar el notch (con volumen ajustable o desactivable).
 - **Varias pantallas**: detecta tus monitores y el agente puede trabajar en cualquiera de ellos dentro de la misma tarea, saltando de uno a otro (el cursor y el brillo del borde se mueven con él). Hay un solo ratón y un solo teclado, así que hace las cosas en una pantalla cada vez, no en dos a la vez.
 - **Elige el modelo** de cada agente: Opus 5.5, Sonnet 5.5 o Haiku 5.5, tanto con API key como con la suscripción. Se cambia en un clic desde la cabecera del notch. Con la suscripción, **Haiku 5.5 es el que menos límite gasta**.
@@ -42,6 +43,19 @@ No necesita APIs de desarrollador de Spotify ni extensiones del navegador: el ag
 **Sin suscripción y sin API key no hay forma legítima de usarlo.** Automatizar la web de ChatGPT o de Claude incumple sus términos y se rompe a menudo, así que la app no lo hace.
 
 Las API keys se guardan **cifradas con DPAPI** (ligadas a tu usuario de Windows) y nunca se envían a la interfaz. Si no hay ninguna guardada, se usan las variables de entorno `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+
+## Voz
+
+Todo funciona **en tu PC y gratis**, sin cuentas ni APIs:
+
+| | Qué usa | Descarga (una vez, desde la app) |
+|---|---|---|
+| **Te hablan** | [Piper](https://github.com/rhasspy/piper): voces neuronales en español (España, México, Argentina), una por agente. | Piper ~22 MB + cada voz 60-115 MB |
+| **Te entienden** | [whisper.cpp](https://github.com/ggml-org/whisper.cpp): reconocimiento de voz de Whisper en local. Tu voz no sale de tu ordenador. | ~8 MB + modelo de 57 MB (rápido) o 181 MB (preciso) |
+
+Se instalan desde **Ajustes → Voz de los agentes / Hablarles** y la voz de cada agente se elige en **Mis agentes**. Mientras no instales Piper, se usa la voz de Windows. Los programas se descargan de sus *releases* oficiales y se comprueban con un SHA-256 fijado en el código; las voces y modelos, de HuggingFace, con el SHA-256 que publica HuggingFace.
+
+Si Windows no deja usar el micrófono: *Configuración → Privacidad y seguridad → Micrófono → Permitir que las aplicaciones de escritorio accedan al micrófono*.
 
 ## Instalación
 
