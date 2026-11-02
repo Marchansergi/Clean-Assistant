@@ -53,6 +53,8 @@ Todo funciona **en tu PC y gratis**, sin cuentas ni APIs:
 | **Te hablan** | [Piper](https://github.com/rhasspy/piper): voces neuronales en español (España, México, Argentina), una por agente. | Piper ~22 MB + cada voz 60-115 MB |
 | **Te entienden** | [whisper.cpp](https://github.com/ggml-org/whisper.cpp): reconocimiento de voz de Whisper en local. Tu voz no sale de tu ordenador. | ~8 MB + modelo de 57 MB (rápido) o 181 MB (preciso) |
 
+**Opcional: ElevenLabs.** Si quieres voces todavía más naturales, guarda tu API key de [ElevenLabs](https://elevenlabs.io/app/settings/api-keys) en *Ajustes → Cuentas*, elige «ElevenLabs» como motor de voz y asigna a cada agente una de las voces de tu cuenta. Es de pago (gasta créditos) y el texto de las respuestas se envía a ElevenLabs. Si falla (sin créditos o sin internet), siguen hablando con Piper y te avisa en el notch. El reconocimiento de tu voz sigue siendo local.
+
 Se instalan desde **Ajustes → Voz de los agentes / Hablarles** y la voz de cada agente se elige en **Mis agentes**. Mientras no instales Piper, se usa la voz de Windows. Los programas se descargan de sus *releases* oficiales y se comprueban con un SHA-256 fijado en el código; las voces y modelos, de HuggingFace, con el SHA-256 que publica HuggingFace.
 
 Si Windows no deja usar el micrófono: *Configuración → Privacidad y seguridad → Micrófono → Permitir que las aplicaciones de escritorio accedan al micrófono*.

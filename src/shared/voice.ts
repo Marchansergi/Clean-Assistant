@@ -76,3 +76,18 @@ export interface VoiceProgress {
   total?: number;
   message?: string;
 }
+
+// ---------- ElevenLabs (API de pago, opcional) ----------
+
+export const ELEVEN_MODELS = [
+  { id: 'eleven_flash_v2_5', label: 'Flash v2.5 · rápido y el más barato' },
+  { id: 'eleven_multilingual_v2', label: 'Multilingual v2 · máxima naturalidad' },
+  { id: 'eleven_v3', label: 'v3 · el más expresivo (más lento)' },
+] as const;
+
+export interface ElevenVoice {
+  id: string;
+  name: string;
+  /** "mujer · español · joven"… según las etiquetas de la voz. */
+  description: string;
+}

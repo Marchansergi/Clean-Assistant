@@ -79,6 +79,7 @@ export const DEFAULT_SETTINGS: Settings = {
   soundVolume: 60,
   voiceReplies: true,
   ttsEngine: 'piper',
+  elevenModel: 'eleven_flash_v2_5',
   ttsVolume: 85,
   ttsRate: 1,
   sttModel: 'small-q5_1',

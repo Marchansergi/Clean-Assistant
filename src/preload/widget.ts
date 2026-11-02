@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AgentEventMsg, ConfirmRequest, ProviderId, PublicSettings, RunStateMsg, SecretName, Settings } from '../shared/types';
-import type { VoiceComponent, VoiceProgress, VoiceStatus } from '../shared/voice';
+import type { ElevenVoice, VoiceComponent, VoiceProgress, VoiceStatus } from '../shared/voice';
 
 function on<T>(channel: string, cb: (payload: T) => void) {
   const listener = (_e: IpcRendererEvent, payload: T) => cb(payload);
@@ -23,11 +23,13 @@ const api = {
   listScreens: (): Promise<string[]> => ipcRenderer.invoke('screens:list'),
   voiceStatus: (): Promise<VoiceStatus> => ipcRenderer.invoke('voice:status'),
   installVoice: (c: VoiceComponent): Promise<VoiceStatus> => ipcRenderer.invoke('voice:install', c),
-  speak: (agentId: string, text: string, override?: { voice?: string; speaker?: string }): Promise<Uint8Array | null> =>
+  speak: (agentId: string, text: string, override?: { voice?: string; speaker?: string; elevenVoiceId?: string }): Promise<Uint8Array | null> =>
     ipcRenderer.invoke('tts:speak', agentId, text, override),
   transcribe: (wav: Uint8Array): Promise<string> => ipcRenderer.invoke('stt:transcribe', wav),
   onVoiceProgress: (cb: (p: VoiceProgress) => void) => on('voice:progress', cb),
   onTalk: (cb: () => void) => on('voice:talk', cb),
+  onVoiceNote: (cb: (text: string) => void) => on('voice:note', cb),
+  elevenVoices: (): Promise<ElevenVoice[]> => ipcRenderer.invoke('eleven:voices'),
   onRunState: (cb: (s: RunStateMsg) => void) => on('run:state', cb),
   onAgentEvent: (cb: (m: AgentEventMsg) => void) => on('agent:event', cb),
   onConfirm: (cb: (r: ConfirmRequest) => void) => on('confirm:request', cb),

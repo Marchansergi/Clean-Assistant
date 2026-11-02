@@ -1,10 +1,10 @@
 import type { WidgetApi } from '../../preload/widget';
 import { CLAUDE_MODELS, DEFAULT_MODELS, OPENAI_MODEL_SUGGESTIONS, PROVIDER_LABELS, isClaudeProvider, modelLabel } from '../../shared/defaults';
-import type { AgentEvent, AgentProfile, ConfirmRequest, ProviderId, PublicSettings, RunStateMsg, Settings } from '../../shared/types';
+import type { AgentEvent, AgentProfile, ConfirmRequest, ProviderId, PublicSettings, RunStateMsg, SecretName, Settings } from '../../shared/types';
 import { avatarHtml } from '../common/mascots';
 import { playNotchSound } from './sounds';
 import { Listener, Speaker, encodeWav, isStopCommand } from './voice';
-import { PIPER_VOICES, STT_MODELS, type VoiceComponent, type VoiceProgress, type VoiceStatus } from '../../shared/voice';
+import { ELEVEN_MODELS, PIPER_VOICES, STT_MODELS, type ElevenVoice, type VoiceComponent, type VoiceProgress, type VoiceStatus } from '../../shared/voice';
 
 declare global {
   interface Window { api: WidgetApi }
@@ -56,6 +56,7 @@ let doneFlash = '';
 let doneTimer: number | undefined;
 let isOpen = false;
 let voice: VoiceStatus | null = null;
+let elevenVoicesCache: ElevenVoice[] | null = null;
 let voiceMode: 'idle' | 'listening' | 'transcribing' = 'idle';
 let voiceNote = '';
 let voiceNoteTimer: number | undefined;
@@ -734,6 +735,49 @@ function agentEditor(a: AgentProfile): HTMLElement {
   };
   renderVoicePicker();
 
+  // Voz de ElevenLabs (solo si es el motor elegido)
+  const elevenBox = h('div');
+  const renderElevenPicker = (list: ElevenVoice[] | null, error = '') => {
+    elevenBox.replaceChildren();
+    if (!settings.hasElevenLabsKey) {
+      elevenBox.append(h('div', { class: 'hint' }, 'Guarda tu API key de ElevenLabs en Ajustes → Cuentas para elegir voz.'));
+      return;
+    }
+    if (!list) {
+      elevenBox.append(h('div', { class: 'hint' }, error || 'Cargando tus voces de ElevenLabs…'));
+      if (error) elevenBox.append(h('button', { class: 'btn ghost small', style: 'margin-top:6px', onclick: () => void loadEleven(true) }, 'Reintentar'));
+      return;
+    }
+    const sel = h('select', { class: 'input' },
+      h('option', { value: '' }, '— Elige una voz —'),
+      ...list.map((v) => h('option', { value: v.id, selected: v.id === draft.elevenVoiceId }, v.description ? `${v.name} · ${v.description}` : v.name)));
+    sel.addEventListener('change', () => {
+      const v = list.find((x) => x.id === sel.value);
+      draft.elevenVoiceId = v?.id;
+      draft.elevenVoiceName = v?.name;
+    });
+    const test = h('button', { class: 'btn ghost small', onclick: () => {
+      if (!draft.elevenVoiceId) return;
+      speaker.stop();
+      const line = `¡Hola! Soy ${draft.name || 'tu agente'}. ¿Qué hacemos hoy?`;
+      speaker.say(line, () => api.speak(draft.id, line, { elevenVoiceId: draft.elevenVoiceId }), settings.ttsVolume, settings.ttsRate);
+    } }, 'Probar voz');
+    elevenBox.append(h('div', { class: 'inline' }, sel, test),
+      h('div', { class: 'hint', style: 'margin-top:4px' }, 'Son las voces de tu cuenta. Para usar otras, añádelas a «My Voices» en elevenlabs.io.'));
+  };
+  const loadEleven = async (force = false) => {
+    if (!settings.hasElevenLabsKey) return renderElevenPicker(null);
+    if (elevenVoicesCache && !force) return renderElevenPicker(elevenVoicesCache);
+    renderElevenPicker(null);
+    try {
+      elevenVoicesCache = await api.elevenVoices();
+      renderElevenPicker(elevenVoicesCache);
+    } catch (e) {
+      renderElevenPicker(null, errText(e));
+    }
+  };
+  if (settings.ttsEngine === 'elevenlabs') void loadEleven();
+
   const extra = h('textarea', { class: 'input', placeholder: 'Ej.: "Usa siempre Firefox. Habla con emojis."' });
   extra.value = draft.extraInstructions;
   extra.addEventListener('input', () => { draft.extraInstructions = extra.value; });
@@ -774,7 +818,8 @@ function agentEditor(a: AgentProfile): HTMLElement {
       h('div', { class: 'field' }, h('label', {}, 'Esfuerzo'), effort,
         h('div', { class: 'hint' }, 'Más esfuerzo = más fiable pero más lento y caro.')),
       h('div', { class: 'field' }, h('label', {}, 'Personalidad e instrucciones'), extra),
-      h('div', { class: 'field' }, h('label', {}, 'Voz'), voiceBox),
+      settings.ttsEngine === 'elevenlabs' ? h('div', { class: 'field' }, h('label', {}, 'Voz de ElevenLabs'), elevenBox) : null,
+      settings.ttsEngine !== 'system' ? h('div', { class: 'field' }, h('label', {}, settings.ttsEngine === 'elevenlabs' ? 'Voz local (respaldo)' : 'Voz'), voiceBox) : null,
     ),
     h('div', { class: 'row-buttons' },
       h('button', { class: 'btn danger', onclick: () => void remove() }, 'Borrar'),
@@ -814,12 +859,13 @@ function range(label: string, key: keyof Settings, min: number, max: number, ste
   return h('div', { class: 'field' }, h('div', { class: 'inline' }, h('label', {}, label), value), input);
 }
 
-function keyField(label: string, name: 'anthropic' | 'openai', has: boolean, link: string): HTMLElement {
+function keyField(label: string, name: SecretName, has: boolean, link: string): HTMLElement {
   const input = h('input', { type: 'password', placeholder: has ? '•••••••• (configurada)' : 'Pega aquí tu API key', autocomplete: 'off' });
   const pill = h('span', { class: `status-pill ${has ? 'ok' : ''}` }, has ? '✓ Configurada' : 'Sin clave');
   const saveBtn = h('button', { class: 'btn primary small', onclick: async () => {
     try {
       settings = await api.setSecret(name, input.value);
+      if (name === 'elevenlabs') elevenVoicesCache = null;
       input.value = '';
       renderSettings();
     } catch (e) {
@@ -854,8 +900,22 @@ function voiceGroup(): HTMLElement {
   const s = settings;
   const engine = h('select', { class: 'input' },
     h('option', { value: 'piper', selected: s.ttsEngine === 'piper' }, 'Piper · voz natural, en tu PC'),
+    h('option', { value: 'elevenlabs', selected: s.ttsEngine === 'elevenlabs' }, 'ElevenLabs · voces premium (API de pago)'),
     h('option', { value: 'system', selected: s.ttsEngine === 'system' }, 'Voz de Windows · sin descargas'));
-  engine.addEventListener('change', () => saveLater({ ttsEngine: engine.value as Settings['ttsEngine'] }));
+  engine.addEventListener('change', async () => {
+    settings = await api.saveSettings({ ttsEngine: engine.value as Settings['ttsEngine'] });
+    renderSettingsKeepScroll();
+  });
+  const elevenModel = h('select', { class: 'input' }, ...ELEVEN_MODELS.map((m) => h('option', { value: m.id, selected: m.id === s.elevenModel }, m.label)));
+  elevenModel.addEventListener('change', () => saveLater({ elevenModel: elevenModel.value }));
+  const elevenBox = s.ttsEngine === 'elevenlabs'
+    ? h('div', {},
+      h('div', { class: 'field' }, h('label', {}, 'Modelo de ElevenLabs'), elevenModel),
+      h('div', { class: 'hint', style: 'margin:-4px 0 10px' },
+        s.hasElevenLabsKey
+          ? 'Cada agente elige su voz de ElevenLabs en «Mis agentes». Lo que dicen se envía a ElevenLabs y gasta créditos de tu cuenta. Si falla (sin créditos o sin internet), hablan con la voz local.'
+          : '⚠️ Guarda tu API key de ElevenLabs arriba, en «Cuentas».'))
+    : null;
   const rateVal = h('span', { class: 'hint' }, `${s.ttsRate.toFixed(2)}×`);
   const rate = h('input', { type: 'range', min: 0.6, max: 1.6, step: 0.05, value: s.ttsRate });
   rate.addEventListener('input', () => {
@@ -866,7 +926,8 @@ function voiceGroup(): HTMLElement {
     h('h3', {}, 'Voz de los agentes'),
     toggle('Que te hablen', 'Leen en voz alta lo que te dicen en el chat.', 'voiceReplies'),
     h('div', { class: 'field' }, h('label', {}, 'Motor de voz'), engine),
-    s.ttsEngine === 'piper' ? installControl(['piper'], 'Piper no está instalado', 22) : null,
+    elevenBox,
+    s.ttsEngine !== 'system' && !isInstalled('piper') ? installControl(['piper'], s.ttsEngine === 'elevenlabs' ? 'Piper (voz local de respaldo) no está instalado' : 'Piper no está instalado', 22) : null,
     s.ttsEngine === 'piper' ? h('div', { class: 'hint', style: 'margin:-4px 0 10px' }, 'Cada agente elige su voz en «Mis agentes». Las voces se descargan una vez y funcionan sin internet.') : null,
     range('Volumen de la voz', 'ttsVolume', 0, 100, 5, '%'),
     h('div', { class: 'field' }, h('div', { class: 'inline' }, h('label', {}, 'Velocidad'), rateVal), rate));
@@ -954,6 +1015,7 @@ function renderSettings() {
       h('h3', {}, 'Cuentas'),
       keyField('API key de Anthropic (Claude)', 'anthropic', s.hasAnthropicKey, 'https://console.anthropic.com/settings/keys'),
       keyField('API key de OpenAI (ChatGPT)', 'openai', s.hasOpenAIKey, 'https://platform.openai.com/api-keys'),
+      keyField('API key de ElevenLabs (voces)', 'elevenlabs', s.hasElevenLabsKey, 'https://elevenlabs.io/app/settings/api-keys'),
       cliField('Claude Code (suscripción Pro/Max)', 'claudeCliPath', 'claude-code'),
       cliField('Codex CLI (suscripción ChatGPT, experimental)', 'codexCliPath', 'codex'),
       h('div', { class: 'hint' }, 'Para usar tu suscripción instala el CLI, inicia sesión en él una vez desde una terminal ("claude" o "codex login") y elige ese cerebro en el agente.'),
@@ -1041,6 +1103,10 @@ async function init() {
   });
   $('micBtn').addEventListener('click', () => void talk());
   api.onTalk(() => void talk());
+  api.onVoiceNote((text) => {
+    noteVoice(text);
+    onAgentEvent(agentById(run.agentId)?.id ?? activeAgent().id, { type: 'info', text });
+  });
   api.onVoiceProgress((p) => {
     progress.set(p.component, p);
     updateProgress(p);

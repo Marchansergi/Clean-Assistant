@@ -22,6 +22,9 @@ export interface AgentProfile {
   voice?: string;
   /** Hablante dentro de la voz, si tiene varios (p. ej. "F" o "M"). */
   voiceSpeaker?: string;
+  /** Voz de ElevenLabs (voice_id) y su nombre, para mostrarlo sin consultar la API. */
+  elevenVoiceId?: string;
+  elevenVoiceName?: string;
 }
 
 export interface Settings {
@@ -56,8 +59,10 @@ export interface Settings {
   soundVolume: number;
   /** Los agentes leen en voz alta lo que dicen. */
   voiceReplies: boolean;
-  /** Motor de voz: Piper (natural, local) o la voz de Windows (sin descargas). */
-  ttsEngine: 'piper' | 'system';
+  /** Motor de voz: Piper (local), ElevenLabs (API, de pago) o la voz de Windows (sin descargas). */
+  ttsEngine: 'piper' | 'elevenlabs' | 'system';
+  /** Modelo de ElevenLabs (id de ELEVEN_MODELS). */
+  elevenModel: string;
   ttsVolume: number;
   /** Velocidad de habla (1 = normal). */
   ttsRate: number;
@@ -77,10 +82,11 @@ export interface Settings {
 export interface PublicSettings extends Settings {
   hasAnthropicKey: boolean;
   hasOpenAIKey: boolean;
+  hasElevenLabsKey: boolean;
   encryptionAvailable: boolean;
 }
 
-export type SecretName = 'anthropic' | 'openai';
+export type SecretName = 'anthropic' | 'openai' | 'elevenlabs';
 
 export type RunStatus = 'idle' | 'running' | 'stopping';
 

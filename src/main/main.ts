@@ -6,10 +6,11 @@ import type { AgentEvent, AgentEventMsg, ConfirmRequest, OverlayMsg, ProviderId,
 import { Desktop } from './desktop';
 import { describeDisplays } from './screen-capture';
 import { installComponent, synthesize, transcribe, voiceStatus } from './voice/manager';
+import { listElevenVoices, synthesizeEleven } from './voice/elevenlabs';
 import type { VoiceComponent } from '../shared/voice';
 import { WinInput } from './input/win-input';
 import { Runner } from './agents/runner';
-import { getPublicSettings, getSettings, saveSettings, setSecret } from './settings';
+import { getPublicSettings, getSecret, getSettings, saveSettings, setSecret } from './settings';
 
 // Notch arriba en el centro: pequeño en reposo, más ancho mientras un agente trabaja
 // y desplegado hacia abajo al abrirlo.
@@ -226,6 +227,14 @@ function unregisterStopShortcut() {
   registeredShortcut = null;
 }
 
+let lastElevenNote = 0;
+/** Aviso breve (como mucho cada 30 s) cuando ElevenLabs falla y se usa la voz local. */
+function noteElevenError(message: string) {
+  if (Date.now() - lastElevenNote < 30_000) return;
+  lastElevenNote = Date.now();
+  sendWidget('voice:note', `ElevenLabs: ${message} Uso la voz local.`);
+}
+
 function confirm(agentId: string, title: string, detail: string): Promise<boolean> {
   const id = crypto.randomUUID();
   if (!expanded) setExpanded(true);
@@ -325,7 +334,7 @@ function registerIpc() {
     return getPublicSettings();
   });
   ipcMain.handle('secret:set', (_e, name: SecretName, value: string) => {
-    if (name !== 'anthropic' && name !== 'openai') throw new Error('Clave desconocida');
+    if (name !== 'anthropic' && name !== 'openai' && name !== 'elevenlabs') throw new Error('Clave desconocida');
     setSecret(name, String(value ?? ''));
     return getPublicSettings();
   });
@@ -352,14 +361,35 @@ function registerIpc() {
     await installComponent(component, (p) => sendWidget('voice:progress', p));
     return voiceStatus();
   });
-  ipcMain.handle('tts:speak', async (_e, agentId: string, text: string, override?: { voice?: string; speaker?: string }) => {
+  ipcMain.handle('tts:speak', async (_e, agentId: string, text: string, override?: { voice?: string; speaker?: string; elevenVoiceId?: string }) => {
     const s = getSettings();
-    if (s.ttsEngine !== 'piper') return null;
+    if (s.ttsEngine === 'system') return null;
     const agent = s.agents.find((a) => a.id === agentId);
-    const voiceId = override ? override.voice : agent?.voice;
-    const speakerName = override ? override.speaker : agent?.voiceSpeaker;
-    const wav = await synthesize(String(text ?? ''), voiceId, speakerName, s.ttsRate);
+    const t = String(text ?? '');
+    if (s.ttsEngine === 'elevenlabs') {
+      const key = getSecret('elevenlabs');
+      const voiceId = override?.elevenVoiceId ?? agent?.elevenVoiceId;
+      if (key && voiceId) {
+        try {
+          const mp3 = await synthesizeEleven(t, voiceId, s.elevenModel, s.ttsRate, key);
+          if (mp3) return new Uint8Array(mp3);
+        } catch (e) {
+          // Sin créditos, sin internet…: sigue hablando con la voz local y avisa en el notch.
+          noteElevenError((e as Error).message);
+        }
+      } else {
+        noteElevenError(key ? `${agent?.name ?? 'Este agente'} no tiene voz de ElevenLabs elegida.` : 'Falta la API key de ElevenLabs.');
+      }
+    }
+    const voiceId = override && 'voice' in override ? override.voice : agent?.voice;
+    const speakerName = override && 'speaker' in override ? override.speaker : agent?.voiceSpeaker;
+    const wav = await synthesize(t, voiceId, speakerName, s.ttsRate);
     return wav ? new Uint8Array(wav) : null;
+  });
+  ipcMain.handle('eleven:voices', async () => {
+    const key = getSecret('elevenlabs');
+    if (!key) throw new Error('Primero guarda tu API key de ElevenLabs.');
+    return listElevenVoices(key);
   });
   ipcMain.handle('stt:transcribe', async (_e, wav: Uint8Array) => {
     const s = getSettings();

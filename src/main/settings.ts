@@ -75,7 +75,7 @@ export function setSecret(name: SecretName, value: string) {
   writeJson(secretsFile(), secrets);
 }
 
-const ENV_FALLBACK: Record<SecretName, string> = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' };
+const ENV_FALLBACK: Record<SecretName, string> = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', elevenlabs: 'ELEVENLABS_API_KEY' };
 
 /** Clave guardada en la app; si no hay, la variable de entorno estándar del proveedor. */
 export function getSecret(name: SecretName): string | null {
@@ -95,6 +95,7 @@ export function getPublicSettings(): PublicSettings {
     ...getSettings(),
     hasAnthropicKey: !!getSecret('anthropic'),
     hasOpenAIKey: !!getSecret('openai'),
+    hasElevenLabsKey: !!getSecret('elevenlabs'),
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
   };
 }
